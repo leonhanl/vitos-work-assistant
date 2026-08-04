@@ -1,0 +1,1 @@
+# vitos-work-assistant
