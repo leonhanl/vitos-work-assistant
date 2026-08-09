@@ -1,0 +1,5 @@
+name: vitos-work-assistant
+
+# Services will be added as the Agent, Web app, and deployable MCP services evolve.
+services: {}
+

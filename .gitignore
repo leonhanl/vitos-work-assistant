@@ -188,3 +188,6 @@ cython_debug/
 temp/
 *.pid
 
+# Optional in-repository override for the MSAL token cache
+msal_token_cache.json
+msal_token_cache.json.*
