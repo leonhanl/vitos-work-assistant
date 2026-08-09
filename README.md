@@ -10,7 +10,7 @@ Vito's Work Assistant 是一个面向企业场景的 AI Assistant 项目。仓�
 vitos-work-assistant/
 ├── apps/
 │   ├── web/                  # Web 应用（待实现）
-│   └── agent/                # LangGraph DeepAgent（待实现）
+│   └── agent/                # DeepAgent + MCP + Skill HTTP API
 ├── services/
 │   ├── m365-mcp/             # Microsoft 365 只读 MCP Server
 │   └── salesforce-mcp/       # Salesforce MCP Server（待实现）
@@ -22,12 +22,14 @@ vitos-work-assistant/
 └── README.md
 ```
 
-当前只实现了 [`services/m365-mcp`](services/m365-mcp/README.md)。它提供：
+当前实现了 [`services/m365-mcp`](services/m365-mcp/README.md) 与最小版
+[`apps/agent`](apps/agent/README.md)。M365 MCP 提供：
 
 - `search_sharepoint`：使用 Microsoft Graph Search 搜索当前用户可访问的文档。
 - `read_document`：下载并提取 DOCX、UTF-8 TXT 或 Markdown 正文。
 
-Agent、Web、Salesforce MCP 和基础设施目录目前只是边界清晰的占位，不包含提前实现。
+Agent 通过 stdio 使用以上两个工具，并提供 `GET /health` 与 `POST /chat`。
+Web、Salesforce MCP 和基础设施目录仍是边界清晰的占位。
 
 ## 当前模块快速开始
 
@@ -55,4 +57,5 @@ python -m m365_mcp.server
 
 ```bash
 python -m pytest services/m365-mcp/tests
+python -m pytest apps/agent/tests
 ```

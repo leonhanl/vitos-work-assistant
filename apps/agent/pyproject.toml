@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vitos-work-assistant-agent"
+version = "0.1.0"
+description = "Minimal DeepAgent HTTP API for Vito's Work Assistant"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "deepagents>=0.7.5,<0.8",
+    "fastapi>=0.139,<1",
+    "langchain-mcp-adapters>=0.3,<0.4",
+    "langchain-openai>=1.4,<2",
+    "pydantic-settings>=2.10,<3",
+    "uvicorn>=0.35,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.28,<1",
+    "pytest>=8,<10",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
