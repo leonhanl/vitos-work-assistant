@@ -29,9 +29,9 @@ vitos-work-assistant/
 - `read_document`：下载并提取 DOCX、UTF-8 TXT 或 Markdown 正文。
 
 M365 MCP 现在作为独立的 Streamable HTTP 服务运行，默认 endpoint 是
-`http://127.0.0.1:8001/mcp`。`apps/agent` 仍保留上一阶段的 stdio client，尚未迁移
-到这个 endpoint，因此当前不能与迁移后的服务直接联调；Agent client migration 是
-下一阶段任务。Web、Salesforce MCP 和基础设施目录仍是边界清晰的占位。
+`http://127.0.0.1:8001/mcp`。`apps/agent` 通过持久的 Streamable HTTP MCP client
+连接该 endpoint，不再 spawn 本地 stdio subprocess。Web、Salesforce MCP 和基础设施
+目录仍是边界清晰的占位。
 
 ## 当前模块快速开始
 
@@ -39,6 +39,7 @@ M365 MCP 现在作为独立的 Streamable HTTP 服务运行，默认 endpoint �
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e "./services/m365-mcp-http[dev]"
+python -m pip install -e "./apps/agent[dev]"
 
 cp services/m365-mcp-http/.env.example services/m365-mcp-http/.env
 # 编辑 .env，填写 M365_TENANT_ID 和 M365_CLIENT_ID
@@ -47,11 +48,13 @@ source services/m365-mcp-http/.env
 set +a
 
 python -m m365_mcp.auth login
+# 保持这个独立服务运行；另一个终端再启动 Agent API
 python -m m365_mcp.server
 ```
 
-完整 Entra 配置、MCP Inspector 和测试步骤见
-[`services/m365-mcp-http/README.md`](services/m365-mcp-http/README.md)。
+完整 Entra/MCP Server 配置见
+[`services/m365-mcp-http/README.md`](services/m365-mcp-http/README.md)，Agent 的 LLM、
+`M365_MCP_URL` 和 API 启动步骤见 [`apps/agent/README.md`](apps/agent/README.md)。
 
 ## 测试
 

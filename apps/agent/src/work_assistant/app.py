@@ -114,7 +114,7 @@ def _startup_error(exc: Exception) -> AgentServiceError:
         return AgentServiceError(
             503,
             "mcp_unavailable",
-            "The Microsoft 365 knowledge service could not be started.",
+            "The Microsoft 365 knowledge service could not be reached.",
         )
     if type(exc).__name__ == "ValidationError":
         return AgentServiceError(
@@ -137,4 +137,3 @@ def _http_error(error: AgentServiceError) -> HTTPException:
 
 
 app = create_app()
-

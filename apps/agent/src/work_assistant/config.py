@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
@@ -21,12 +20,12 @@ class Settings(BaseSettings):
     llm_base_url: AnyHttpUrl = Field(validation_alias="LLM_BASE_URL")
     llm_api_key: SecretStr = Field(validation_alias="LLM_API_KEY")
     llm_model: str = Field(validation_alias="LLM_MODEL")
-    m365_mcp_python: str = Field(
-        default_factory=lambda: sys.executable,
-        validation_alias="M365_MCP_PYTHON",
+    m365_mcp_url: AnyHttpUrl = Field(
+        default=AnyHttpUrl("http://127.0.0.1:8001/mcp"),
+        validation_alias="M365_MCP_URL",
     )
 
-    @field_validator("llm_model", "m365_mcp_python")
+    @field_validator("llm_model")
     @classmethod
     def must_not_be_blank(cls, value: str) -> str:
         value = value.strip()
@@ -46,10 +45,6 @@ class Settings(BaseSettings):
         return Path(__file__).resolve().parents[4]
 
     @property
-    def m365_mcp_working_directory(self) -> Path:
-        return self.repository_root / "services" / "m365-mcp"
-
-    @property
     def skill_file(self) -> Path:
         return (
             self.repository_root
@@ -59,4 +54,3 @@ class Settings(BaseSettings):
             / "enterprise-knowledge-search"
             / "SKILL.md"
         )
-

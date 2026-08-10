@@ -222,7 +222,7 @@ def classify_agent_error(exc: Exception) -> AgentServiceError:
         return AgentServiceError(
             503,
             "m365_login_required",
-            "Microsoft 365 is not logged in. Run the existing m365-mcp login command.",
+            "Microsoft 365 is not logged in. Run the m365-mcp-http login command.",
         )
     if "microsoft graph" in detail and ("401" in detail or "login session" in detail):
         return AgentServiceError(

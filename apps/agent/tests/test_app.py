@@ -82,7 +82,6 @@ def test_mcp_startup_error_keeps_health_but_disables_chat() -> None:
     assert response.json() == {
         "detail": {
             "code": "mcp_unavailable",
-            "message": "The Microsoft 365 knowledge service could not be started.",
+            "message": "The Microsoft 365 knowledge service could not be reached.",
         }
     }
-
