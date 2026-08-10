@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import quote
@@ -9,6 +10,7 @@ from urllib.parse import quote
 import httpx
 
 GRAPH_BASE_URL = "https://graph.microsoft.com/v1.0"
+logger = logging.getLogger(__name__)
 
 
 class GraphAPIError(RuntimeError):
@@ -146,12 +148,26 @@ class GraphClient:
                 headers={"Authorization": f"Bearer {token}"},
                 **kwargs,
             )
+        except httpx.TimeoutException:
+            logger.warning("Microsoft Graph timeout method=%s path=%s", method, path)
+            raise GraphAPIError(
+                "Microsoft Graph request timed out. Wait briefly and try again."
+            ) from None
         except httpx.HTTPError:
+            logger.warning(
+                "Microsoft Graph network error method=%s path=%s", method, path
+            )
             raise GraphAPIError(
                 "Could not connect to Microsoft Graph. Check the network and try again."
             ) from None
 
         if response.status_code >= 400:
+            logger.warning(
+                "Microsoft Graph response status=%d method=%s path=%s",
+                response.status_code,
+                method,
+                path,
+            )
             raise self._map_error(response)
         return response
 

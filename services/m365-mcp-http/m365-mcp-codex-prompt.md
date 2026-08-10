@@ -1,3 +1,6 @@
+> 历史参考：此文件记录最初 stdio 版本的实现任务，已被当前 Streamable HTTP
+> 架构取代。当前运行方式与配置以本目录 `README.md` 为准。
+
 # 任务：实现一个最小版 Microsoft 365 MCP Server
 
 我正在开发一个企业 AI Assistant Demo，名称暂时为 **Vito's Work Assistant**。
