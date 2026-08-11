@@ -30,8 +30,13 @@ vitos-work-assistant/
 
 M365 MCP 现在作为独立的 Streamable HTTP 服务运行，默认 endpoint 是
 `http://127.0.0.1:8001/mcp`。`apps/agent` 通过持久的 Streamable HTTP MCP client
-连接该 endpoint，不再 spawn 本地 stdio subprocess。Web、Salesforce MCP 和基础设施
-目录仍是边界清晰的占位。
+连接该 endpoint，不再 spawn 本地 stdio subprocess。Agent API 使用 Microsoft Entra
+Token A 保护 `GET /me` 与 `POST /chat`；`GET /health` 保持匿名。
+
+当前身份边界是：Alice/Bob 的 Token A 只认证 Work Assistant API。下游
+`m365-mcp-http` 仍使用 Device Code cache 中的同一个 Microsoft 365 用户访问 Graph，
+Agent 不向 MCP 转发 Token A；OBO、Graph Token B 与 per-user Graph access 尚未实现。
+Web、Salesforce MCP 和基础设施目录仍是边界清晰的占位。
 
 ## 当前模块快速开始
 
@@ -53,8 +58,9 @@ python -m m365_mcp.server
 ```
 
 完整 Entra/MCP Server 配置见
-[`services/m365-mcp-http/README.md`](services/m365-mcp-http/README.md)，Agent 的 LLM、
-`M365_MCP_URL` 和 API 启动步骤见 [`apps/agent/README.md`](apps/agent/README.md)。
+[`services/m365-mcp-http/README.md`](services/m365-mcp-http/README.md)。Work Assistant
+API 所需的两个 Entra App Registration、Token A 验证、Agent 环境变量、MSAL Python
+Alice/Bob 测试及启动步骤见 [`apps/agent/README.md`](apps/agent/README.md)。
 
 ## 测试
 

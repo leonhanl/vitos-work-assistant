@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 
 from work_assistant.agent import AgentService, AgentServiceError
+from work_assistant.auth import CurrentUser, get_current_user
 from work_assistant.config import Settings
 from work_assistant.mcp import M365MCPClient, MCPConnectionError
 from work_assistant.models import ChatRequest, ChatResponse
@@ -27,6 +28,7 @@ class ChatService(Protocol):
 
 
 ServiceFactory = Callable[[], AbstractAsyncContextManager[ChatService]]
+CurrentUserDependency = Callable[..., Any]
 
 
 @asynccontextmanager
@@ -40,7 +42,10 @@ async def agent_service_context() -> AsyncIterator[ChatService]:
         await mcp_client.close()
 
 
-def create_app(service_factory: ServiceFactory = agent_service_context) -> FastAPI:
+def create_app(
+    service_factory: ServiceFactory = agent_service_context,
+    current_user_dependency: CurrentUserDependency = get_current_user,
+) -> FastAPI:
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.chat_service = None
@@ -71,8 +76,18 @@ def create_app(service_factory: ServiceFactory = agent_service_context) -> FastA
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @application.get("/me", response_model=CurrentUser)
+    async def me(
+        current_user: CurrentUser = Depends(current_user_dependency),
+    ) -> CurrentUser:
+        return current_user
+
     @application.post("/chat", response_model=ChatResponse)
-    async def chat(payload: ChatRequest, request: Request) -> ChatResponse:
+    async def chat(
+        payload: ChatRequest,
+        request: Request,
+        current_user: CurrentUser = Depends(current_user_dependency),
+    ) -> ChatResponse:
         thread_id = payload.thread_id or str(uuid4())
         logger.info("Chat request started", extra={"thread_id": thread_id})
         service: ChatService | None = request.app.state.chat_service

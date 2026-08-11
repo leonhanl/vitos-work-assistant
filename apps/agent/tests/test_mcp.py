@@ -21,6 +21,11 @@ def _settings(monkeypatch: pytest.MonkeyPatch, endpoint: str) -> Settings:
     monkeypatch.setenv("LLM_BASE_URL", "https://provider.example/v1")
     monkeypatch.setenv("LLM_API_KEY", "test-key")
     monkeypatch.setenv("LLM_MODEL", "tool-model")
+    monkeypatch.setenv("ENTRA_TENANT_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv(
+        "ENTRA_WORK_ASSISTANT_API_CLIENT_ID",
+        "22222222-2222-2222-2222-222222222222",
+    )
     monkeypatch.setenv("M365_MCP_URL", endpoint)
     return Settings()
 

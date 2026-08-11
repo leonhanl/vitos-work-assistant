@@ -1,45 +1,64 @@
 # Vito's Work Assistant Agent API
 
-这是一个最小、仅 API 的企业 Assistant Demo：FastAPI 调用 DeepAgent；DeepAgent
-按需读取一个企业知识搜索 Skill，并通过持久的 Streamable HTTP MCP session 使用
-`services/m365-mcp-http` 的 `search_sharepoint` 与 `read_document` 工具。
+这是一个仅 API 的企业 Assistant Demo。FastAPI 现在是 Microsoft Entra 单租户、
+多用户认证的 Web API；Alice 和 Bob 使用各自的 **Token A** 调用受保护 endpoint。
+DeepAgent 仍通过 Streamable HTTP 连接独立运行的 `services/m365-mcp-http`。
 
-## 边界与身份模型
-
-当前调用链是：
+## 当前认证架构与安全边界
 
 ```text
-API caller
-  → Work Assistant API
-  → DeepAgent
-  → Streamable HTTP
-  → services/m365-mcp-http
-  → 当前本地 Device Code 登录用户
-  → Microsoft Graph
+Alice / Bob
+    │ interactive login
+    ▼
+Microsoft Entra ID
+    │ Token A: aud = Work Assistant API
+    ▼
+Work Assistant FastAPI
+    │ validate signature / iss / tid / aud / exp / nbf / ver / scp
+    │ CurrentUser = (tid, oid), username 仅用于显示和日志
+    ▼
+DeepAgent
+    │ Streamable HTTP（不转发 Token A）
+    ▼
+m365-mcp-http
+    │ Device Code Flow + MSAL token cache
+    ▼
+Microsoft Graph（仍是同一个预先登录的 M365 用户）
 ```
 
-这是刻意的 **single-user development mode**。所有 `/chat` 请求最终都使用同一个
-本地 Microsoft 365 delegated identity；它不是多用户安全架构，也没有 API
-authentication 或 OBO。未来可替换为 Work Assistant Entra Login → user token → OBO
-→ Graph delegated token，但本版本不实现。
+因此，Work Assistant API 已能认证并区分 Alice 和 Bob，但 Graph 访问还不是
+per-user delegated access。Alice 和 Bob 触发的 `search_sharepoint` / `read_document`
+仍使用 m365-mcp-http 当前 Device Code 缓存的同一个身份。Token A 只允许调用 Work
+Assistant API，绝不能当作 Graph token 或 MCP credential。
 
-## 设计
+本阶段没有 OBO、Graph Token B、MCP OAuth、token propagation、RBAC 或 Graph `/me`。
+`GET /me` 只返回已经验证的 Token A claims。
 
-- `config.py`：验证 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 和
-  `M365_MCP_URL`。
-- `llm.py`：构建一个可配置 `base_url` 的 LangChain `ChatOpenAI`。
-  显式使用 Chat Completions，不依赖 OpenAI Responses API。
-- `mcp.py`：连接独立运行的 M365 Streamable HTTP endpoint，在 FastAPI 生命周期
-  内保持一个 MCP client session，并只加载两个既有工具。Agent 不再 spawn MCP
-  subprocess。
+> **Conversation authorization TODO**：`thread_id` 的内存状态尚未绑定 `(tid, oid)`。
+> 知道其他 `thread_id` 的已认证用户可能访问其对话历史。当前仅适合受控 Demo，后续需
+> 在持久化与授权设计中绑定 conversation owner；本阶段不实现该重构。
+
+下一阶段才会考虑：
+
+```text
+Token A → Work Assistant → OBO → Graph Token B → m365-mcp-http
+        → Microsoft Graph as current user
+```
+
+## 代码边界
+
+- `auth.py`：Bearer 提取、tenant-specific OIDC metadata/JWKS、Token A 验证、scope
+  验证及 `CurrentUser`。
+- `config.py`：验证 LLM、Entra API 与 MCP endpoint 配置。
+- `app.py`：匿名 `GET /health`，受保护的 `GET /me` 和 `POST /chat`。
+- `llm.py`：构建可配置 `base_url` 的 LangChain `ChatOpenAI`。
+- `mcp.py`：在 FastAPI 生命周期内保持 Streamable HTTP MCP session，只加载
+  `search_sharepoint` 与 `read_document`。
 - `agent.py`：用 `create_deep_agent`、`StateBackend` 与 `InMemorySaver` 构建 Agent。
-  Skill 文件注入内存状态；Agent 不获得宿主文件系统访问权。默认 subagent / `task`
-  和不需要的文件写入工具已关闭，本阶段只有一个 Agent。
-- `app.py`：仅暴露 `GET /health` 和 `POST /chat`。
-- `skills/enterprise-knowledge-search/SKILL.md`：按需加载的检索方法论。
+- `examples/entra_test_client.py`：开发用 MSAL Python public client，不属于服务端认证。
 
-`sources` 只从当前轮真实 `search_sharepoint` / `read_document` 工具消息的结构化
-字段提取，不从模型文本猜测 URL。若读取过文档，优先只返回实际读取文档的来源。
+DeepAgent 不接收 CurrentUser 或原始 JWT；Token A 不进入 prompt、messages、Agent
+state 或 MCP request。`sources` 仍只从真实 MCP tool message 的结构化字段提取。
 
 ## 安装
 
@@ -52,9 +71,244 @@ python -m pip install -e "./services/m365-mcp-http[dev]"
 python -m pip install -e "./apps/agent[dev]"
 ```
 
-## 1. 登录并启动 m365-mcp-http
+## 1. 手工配置 Microsoft Entra
 
-使用 M365 服务 README 中的真实流程。先配置它自己的环境文件并登录：
+代码不会创建或修改 App Registration。请在 Microsoft Entra admin center 的同一个
+Vito tenant 中手工创建两个 **Accounts in this organizational directory only** 的
+单租户应用。
+
+两个注册代表不同的 OAuth 角色：
+
+```text
+vitos-work-assistant-client                 vitos-work-assistant-api
+Python public client / future frontend  →  FastAPI backend + DeepAgent
+发起用户登录并取得 Token A                  暴露 scope 并验证 Token A
+需要 redirect URI                           当前不需要 redirect URI
+```
+
+`vitos-work-assistant-api` 不是单独代表 LLM 或 DeepAgent，而是代表包含 Authentication、
+FastAPI endpoints 与 DeepAgent 的整个后端安全边界。未来实现 OBO 时，通常仍由这个
+API registration 作为 confidential client 用 Token A 换取 Graph Token B；但是本阶段
+不创建 credential、不授予 Graph permission，也不实现 OBO。
+
+### 1.1 `vitos-work-assistant-api`（protected Web API）
+
+#### A. 创建 registration
+
+进入 **Microsoft Entra admin center → Identity → Applications → App registrations →
+New registration**，输入：
+
+| Portal 字段 | 输入值 |
+|---|---|
+| Name | `vitos-work-assistant-api` |
+| Supported account types | `Accounts in this organizational directory only` |
+| Redirect URI | 留空 |
+
+点击 **Register**。在 Overview 页面记录以下值，注意不要混淆 Application ID 与
+Object ID：
+
+| README 占位符 | Portal 中的值 | 用途 |
+|---|---|---|
+| `<TENANT_ID>` | Directory (tenant) ID | 限制只接受 Vito tenant |
+| `<WORK_ASSISTANT_API_CLIENT_ID>` | Application (client) ID | Token A audience / API identifier |
+
+进入 **Owners → Add owners**，把当前配置人员加入 Owner。之后 client registration
+也添加同一 Owner，可以避免 API 在 **My APIs** 中不可见。
+
+#### B. 设置 Application ID URI
+
+进入 **Expose an API**，点击 Application ID URI 旁的 **Add**，保持推荐值：
+
+```text
+api://<WORK_ASSISTANT_API_CLIENT_ID>
+```
+
+这里必须使用 API 的 **Application (client) ID**，不是 Object ID；末尾不要添加 `/`。
+例如 API client ID 为 `11111111-2222-3333-4444-555555555555` 时，输入：
+
+```text
+api://11111111-2222-3333-4444-555555555555
+```
+
+点击 **Save**。
+
+#### C. 完整填写 `access_as_user` scope
+
+仍在 **Expose an API**，点击 **Add a scope**，逐项填写：
+
+| Portal 字段 | 输入值 |
+|---|---|
+| Scope name | `access_as_user` |
+| Who can consent? | `Admins and users` |
+| Admin consent display name | `Access Vito's Work Assistant as the signed-in user` |
+| Admin consent description | `Allows the application to access Vito's Work Assistant API on behalf of the signed-in user.` |
+| User consent display name | `Access Vito's Work Assistant` |
+| User consent description | `Allow this application to access Vito's Work Assistant on your behalf.` |
+| State | `Enabled` |
+
+`Admins and users` 适合这个低权限、学习型 Demo。如果组织策略要求所有应用都经过
+管理员审批，也可以选择 `Admins only`；这只改变谁能 consent，不改变 FastAPI 对
+`scp=access_as_user` 的检查。点击 **Add scope** 后，页面应显示完整 scope：
+
+```text
+api://<WORK_ASSISTANT_API_CLIENT_ID>/access_as_user
+```
+
+Portal 会为该 scope 自动生成一个 Permission ID。保留这个自动生成的 GUID；代码和
+`.env` 都不需要填写 Permission ID。
+
+#### D. 要求 v2.0 access token
+
+进入 **Manifest**。在现有 `"api"` 对象中找到 `requestedAccessTokenVersion`，将其
+值改为数字 `2`：
+
+```json
+"requestedAccessTokenVersion": 2
+```
+
+不要删除或替换 `"api"` 对象中的 `oauth2PermissionScopes`；它包含刚才由 portal 创建
+的 scope。点击 **Save**。这个设置由 resource/API 决定 Token A 的格式；如果保持
+`null`，可能得到 v1 token，而本项目会拒绝 `ver != 2.0` 的 token。
+
+#### E. API registration 完成检查
+
+```text
+Supported account types     = Current organization only
+signInAudience              = AzureADMyOrg
+Application ID URI          = api://<WORK_ASSISTANT_API_CLIENT_ID>
+Exposed scope               = access_as_user
+Scope state                 = Enabled
+requestedAccessTokenVersion = 2
+Redirect URI                = none
+Client secret/certificate   = none（本阶段）
+Microsoft Graph permission  = none（本阶段）
+```
+
+如果新 registration 自动带有 Microsoft Graph `User.Read`，本阶段可以从 API
+permissions 中移除；Work Assistant 对 Graph 的访问仍由独立的 m365-mcp-http App
+Registration 和 Device Code identity 完成。
+
+### 1.2 `vitos-work-assistant-client`（Python public client）
+
+这个 registration 当前代表 `examples/entra_test_client.py`。它负责打开浏览器让 Alice
+或 Bob 登录、接收 Entra 返回的 authorization code、取得 Token A，然后调用 `/me`
+和 `/chat`。它不运行 Agent，也不直接调用 Microsoft Graph。
+
+#### A. 创建 registration
+
+进入 **App registrations → New registration**，输入：
+
+| Portal 字段 | 输入值 |
+|---|---|
+| Name | `vitos-work-assistant-client` |
+| Supported account types | `Accounts in this organizational directory only` |
+| Redirect URI | 注册页面先留空，下一步在 Authentication 中配置 |
+
+点击 **Register**，记录：
+
+| README 占位符 | Portal 中的值 | 用途 |
+|---|---|---|
+| `<TEST_CLIENT_ID>` | Application (client) ID | MSAL public client ID |
+| `<TENANT_ID>` | Directory (tenant) ID | 必须与 API registration 相同 |
+
+进入 **Owners → Add owners**，添加与 API registration 相同的 Owner。不要进入
+Certificates & secrets 创建 client secret；Python test client 是 public client，不能
+安全保存 secret。
+
+#### B. 配置 interactive login redirect
+
+进入 **Authentication → Add a platform → Mobile and desktop applications**：
+
+1. 添加或选择 redirect URI `http://localhost`。
+2. 点击 **Configure** / **Save**。
+3. 在 Authentication 页面的 **Advanced settings** 中，将
+   **Allow public client flows** 设置为 `Yes` 并保存。
+
+这里的 `http://localhost` 不是 Work Assistant API 地址。MSAL Python 登录时会在本机
+启动临时 loopback listener；Entra 登录完成后，只把 authorization response/code
+返回到这个预先登记的可信 redirect URI。MSAL 随后使用 Authorization Code + PKCE
+取得 Token A。
+
+未来如果换成 React SPA，需要另外添加 **Single-page application** platform，并登记
+实际 frontend callback，例如 `http://localhost:3000/auth/callback` 与生产 HTTPS
+callback；不要把当前 desktop `http://localhost` 配置机械复制到生产环境。
+
+#### C. 给 client 添加 API delegated permission
+
+进入 **API permissions → Add a permission → My APIs**：
+
+1. 选择 `vitos-work-assistant-api`。
+2. 选择 **Delegated permissions**，不要选择 Application permissions。
+3. 勾选 `access_as_user`。
+4. 点击 **Add permissions**。
+
+完成后 API permissions 页面应显示：
+
+```text
+API / Permission name           Type       Admin consent required
+vitos-work-assistant-api
+  access_as_user                Delegated  取决于 scope/tenant consent policy
+```
+
+若 `vitos-work-assistant-api` 没出现在 **My APIs**，先确认两个 registration 位于同一
+tenant，且当前账号是两个 registration 的 Owner。若 tenant 禁止 user consent，则由
+管理员点击 **Grant admin consent for <tenant>**。
+
+新 registration 如果自动带有 Microsoft Graph `User.Read`，请将它移除。当前 Client
+唯一需要的业务 permission 是 Work Assistant API 的 `access_as_user`，不需要 Graph
+`User.Read`、`Sites.Read.All`、`Files.Read.All` 或 `.default`。
+
+#### D. Client registration 完成检查
+
+```text
+Supported account types       = Current organization only
+Application type              = Public client / mobile and desktop
+Redirect URI                  = http://localhost
+Allow public client flows     = Yes
+Client secret/certificate     = none
+Delegated API permission      = vitos-work-assistant-api / access_as_user
+Microsoft Graph permissions   = none
+```
+
+Test Client 请求的唯一业务 scope 是：
+
+```text
+api://<WORK_ASSISTANT_API_CLIENT_ID>/access_as_user
+```
+
+最终把三个 ID 写入 `apps/agent/.env`。API client ID 和 Test Client ID 是两个不同值：
+
+```dotenv
+ENTRA_TENANT_ID=<两个 registrations 共同的 Directory tenant ID>
+ENTRA_WORK_ASSISTANT_API_CLIENT_ID=<vitos-work-assistant-api Application client ID>
+ENTRA_REQUIRED_SCOPE=access_as_user
+ENTRA_TEST_CLIENT_ID=<vitos-work-assistant-client Application client ID>
+WORK_ASSISTANT_API_URL=http://127.0.0.1:8000
+```
+
+不要把 `api://...` 填进 `ENTRA_WORK_ASSISTANT_API_CLIENT_ID`；该变量只接受 GUID。
+Test Client 会用它自动构造上面的完整 scope URI。
+
+### Token version 与验证方式
+
+Test Client 使用 tenant-specific v2 authority；API 使用以下 tenant-specific metadata：
+
+```text
+https://login.microsoftonline.com/<TENANT_ID>/v2.0/.well-known/openid-configuration
+```
+
+API 从 metadata 获取 issuer 与 JWKS，并使用 PyJWT 验证 RS256 signature、`iss`、
+`aud`、`exp`、`nbf`，再强制检查 `ver=2.0`、`tid`、`oid` 和 `scp`。v2 自定义 API
+token 的 `aud` 应为 `vitos-work-assistant-api` 的 Application (client) ID；Graph
+token 的 `aud` 不同，因此会被拒绝。
+
+开发时可以在浏览器的 `jwt.ms` 检查 token payload 中的 `ver`、`aud`、`tid`、`oid`
+和 `scp`，但 access token 是敏感 credential：不要粘贴到不受信任的网站、日志、
+截图或 issue。仅查看 payload 不能替代 API 的签名验证。
+
+## 2. 登录并启动 m365-mcp-http
+
+此部分保持原有 Device Code 架构。配置服务自己的环境并登录：
 
 ```bash
 cd services/m365-mcp-http
@@ -64,108 +318,192 @@ set -a
 source .env
 set +a
 python -m m365_mcp.auth login
-cd ../..
 ```
 
-Token cache 默认位于 `~/.cache/m365-mcp/msal_token_cache.json`。API 不会启动
-Device Code Flow；无有效 session 时，`/chat` 返回清晰错误并要求重新登录。
-
-登录成功后，在**终端 A**启动 M365 MCP Server 并保持运行：
+在终端 A 保持服务运行：
 
 ```bash
-cd services/m365-mcp-http
-set -a
-source .env
-set +a
 python -m m365_mcp.server
 ```
 
-默认 endpoint 是 `http://127.0.0.1:8001/mcp`。当前 endpoint 没有 MCP HTTP
-authentication，只应用于本机受信任的 single-user 开发环境。
+默认 endpoint 是 `http://127.0.0.1:8001/mcp`。它仍没有 MCP HTTP authentication，
+只适用于本机受信任的 single-user 开发环境；Agent 不向其发送 Token A。
+Token cache 默认位于 `~/.cache/m365-mcp/msal_token_cache.json`。Work Assistant API
+不会启动 Device Code Flow；cache 无有效 session 时，`/chat` 返回脱敏后的服务错误并
+要求按 M365 README 重新登录。
 
-## 2. 配置 Agent
+## 3. 配置并启动 Work Assistant
+
+从仓库根目录执行：
 
 ```bash
 cp apps/agent/.env.example apps/agent/.env
-# 编辑 apps/agent/.env，填写 LLM 配置和 MCP endpoint，不要提交真实 key
-set -a
-source apps/agent/.env
-set +a
-```
-
-最小 LLM 配置：
-
-```dotenv
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_API_KEY=...
-LLM_MODEL=...
-M365_MCP_URL=http://127.0.0.1:8001/mcp
-```
-
-理论上可仅修改这三个值切换 OpenAI、DeepSeek、OpenRouter 或其他兼容服务，
-但 endpoint 必须兼容 OpenAI Chat Completions，且所选模型必须支持 Agent 所需的
-Tool / Function Calling。项目不承诺所有标称“OpenAI-compatible”的服务都兼容。
-
-当 `LLM_MODEL` 是 GPT-5.6 系列时，代码会自动为 Chat Completions 设置
-`reasoning_effort="none"`。这是 GPT-5.6 在 Chat Completions 上同时使用 function
-tools 的兼容要求；本 Demo 不会因此切换到 Responses API。
-
-`M365_TENANT_ID`、`M365_CLIENT_ID` 和 token cache 配置只属于独立运行的 M365
-Server；Agent 不再读取或转发它们。若 Server 使用其他 host、port 或 path，只需修改
-`M365_MCP_URL`。
-
-## 3. 启动 API
-
-保持终端 A 中的 M365 MCP Server 运行。在**终端 B**从仓库根目录加载 Agent 配置并
-启动 API：
-
-```bash
+# 编辑 apps/agent/.env；不要提交真实 key、token 或密码
 set -a
 source apps/agent/.env
 set +a
 uvicorn work_assistant.app:app --reload
 ```
 
-`GET /health` 是刻意保持简单的进程健康检查，即使启动配置有误也返回
-`{"status":"ok"}`；若 `M365_MCP_URL` 无法连接，`/chat` 会返回经过脱敏的
-`503 mcp_unavailable`。
+关键配置如下：
+
+```dotenv
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=...
+LLM_MODEL=...
+
+ENTRA_TENANT_ID=<Directory tenant ID>
+ENTRA_WORK_ASSISTANT_API_CLIENT_ID=<vitos-work-assistant-api client ID>
+ENTRA_REQUIRED_SCOPE=access_as_user
+
+M365_MCP_URL=http://127.0.0.1:8001/mcp
+
+ENTRA_TEST_CLIENT_ID=<vitos-work-assistant-client client ID>
+WORK_ASSISTANT_API_URL=http://127.0.0.1:8000
+```
+
+`M365_TENANT_ID`、`M365_CLIENT_ID` 与 M365 token cache 配置只属于独立 M365
+Server。两个 App Registration 的 client ID 职责不同，不要混用。
+
+LLM endpoint 必须兼容 OpenAI Chat Completions，模型必须支持 Agent 所需的 tool /
+function calling。`LLM_MODEL` 为 GPT-5.6 系列时，现有代码继续使用 Chat Completions
+并设置其工具调用所需的 `reasoning_effort="none"`。
 
 ## 4. 手工验证
 
-健康检查：
+### Health 与匿名拒绝
+
+`/health` 不需要 Token A：
 
 ```bash
-curl http://localhost:8000/health
+curl http://127.0.0.1:8000/health
 ```
 
-企业知识问题（应按需 search，必要时 read）：
+预期为 `{"status":"ok"}`。匿名 `/chat` 必须返回 `401`：
 
 ```bash
-curl -X POST http://localhost:8000/chat \
+curl -i -X POST http://127.0.0.1:8000/chat \
   -H "Content-Type: application/json" \
-  -d '{"thread_id":"demo-001","message":"How to connect to corporate VPN？"}'
+  -d '{"message":"hello"}'
 ```
 
-通用问题（不应机械搜索 SharePoint）：
+### Alice
+
+保持 Agent 环境变量已加载，运行 public test client：
 
 ```bash
-curl -X POST http://localhost:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"Python 中 list 和 tuple 有什么区别？"}'
+python apps/agent/examples/entra_test_client.py \
+  --login-hint alice@vitosdemo.com \
+  --message "Python 中 list 和 tuple 有什么区别？"
 ```
 
-不传 `thread_id` 时 API 自动生成 UUID。相同 `thread_id` 的历史仅保存在当前进程
-内存中，API 重启后丢失。
+MSAL 会打开 Microsoft 登录页面并使用 Authorization Code + PKCE 获取 access token。
+脚本先调用 Work Assistant `GET /me`，再调用 `POST /chat`；默认只显示过期时间和
+response，不打印 Token A。先只验证身份而不执行 Agent/LLM，可加 `--me-only`。
+
+记录 Alice 的 `oid`、`tid` 与 `username`。
+
+### Bob
+
+再次运行同一命令，并在浏览器 account chooser 中选择 Bob：
+
+```bash
+python apps/agent/examples/entra_test_client.py \
+  --login-hint bob@vitosdemo.com \
+  --me-only
+```
+
+预期 Bob 的 `oid` 和 `username` 与 Alice 不同，`tid` 相同。去掉 `--me-only` 后，Bob
+也应能成功调用 `/chat`。脚本每次使用 `prompt=select_account`，不会在 `.env` 收集或
+保存 Alice/Bob 密码。
+
+不传 `thread_id` 时，`/chat` 仍自动生成 UUID；同一 `thread_id` 的历史仅保存在当前
+进程内存，重启后丢失。认证没有改变既有 ChatRequest/ChatResponse contract。
+
+### 错误语义与 wrong resource
+
+- 缺少或无效 Bearer、错误 signature、过期、尚未生效、错误 issuer/tenant、Graph
+  token 或其他错误 audience：`401 Unauthorized`。
+- Token A 有效但 `scp` 不含 `access_as_user`：`403 Forbidden`。
+- OIDC metadata 或 JWKS 暂时不可用：`503 Service Unavailable`。
+
+若已有一个用于调试的 Graph access token，可在受控本机环境中用它调用 `/me` 或
+`/chat`；预期 `401`，因为它的 `aud` 不是 Work Assistant API。不要为此给 Test
+Client 添加 Graph permissions，也不要把 token 保存进仓库或日志。
+
+### 精确撤销某个用户的开发 consent
+
+`examples/revoke_entra_user_consent.ps1` 用于清理 Alice/Bob 的个人 delegated consent。
+脚本根据两个 **Application (client) ID** 自动解析 Enterprise Application/service
+principal，只匹配：
+
+```text
+consentType = Principal
+principalId = 指定用户的 Object ID
+clientId = vitos-work-assistant-client 或 vitos-work-assistant-api service principal
+```
+
+它会跳过 `AllPrincipals` tenant-wide grants、其他用户和其他应用。默认是 dry run，
+只有显式添加 `-Execute` 并再次输入目标 UPN 才删除。
+
+macOS 尚未安装 PowerShell 时：
+
+```bash
+brew install powershell
+pwsh -Command 'Install-Module Microsoft.Graph -Scope CurrentUser'
+```
+
+从仓库根目录加载真实 ID，先执行只读预览：
+
+```bash
+set -a
+source apps/agent/.env
+set +a
+
+pwsh -File apps/agent/examples/revoke_entra_user_consent.ps1 \
+  -TenantId "$ENTRA_TENANT_ID" \
+  -UserPrincipalName "bob@vitosdemo.com" \
+  -ClientApplicationId "$ENTRA_TEST_CLIENT_ID" \
+  -ApiApplicationId "$ENTRA_WORK_ASSISTANT_API_CLIENT_ID"
+```
+
+脚本会要求管理员 interactive login，并请求 `Application.Read.All`、`User.Read.All` 与
+高权限 `DelegatedPermissionGrant.ReadWrite.All`。只应在受控 Demo tenant 中由适当的
+Entra administrator 使用。确认 dry-run 表格中的每一行都属于 Bob 后，再执行：
+
+```bash
+pwsh -File apps/agent/examples/revoke_entra_user_consent.ps1 \
+  -TenantId "$ENTRA_TENANT_ID" \
+  -UserPrincipalName "bob@vitosdemo.com" \
+  -ClientApplicationId "$ENTRA_TEST_CLIENT_ID" \
+  -ApiApplicationId "$ENTRA_WORK_ASSISTANT_API_CLIENT_ID" \
+  -Execute
+```
+
+删除是可通过用户重新 consent 恢复的，但已经签发的 access token 在自身过期前仍可能
+有效。Entra portal 的 User consent 页面也可能延迟几分钟才反映变化。脚本不会删除
+App Registration、Enterprise Application、用户或 admin consent。
 
 ## 测试
 
-单元测试全部 mock Agent / 外部调用，不登录 Microsoft 365，也不调用真实 LLM：
+单元测试使用本地临时 RSA key，不访问 Entra、Graph、真实 JWKS 或 LLM：
 
 ```bash
 python -m pytest apps/agent/tests
 ```
 
-测试覆盖 health、请求验证、Agent mock、MCP 连接错误到 API 错误的映射、LLM/MCP
-配置验证，以及 sources 归一化与响应整形。`test_mcp.py` 会启动本地 stateless
-Streamable HTTP MCP Server，验证 Agent 的连接、工具发现和真实 tool call，不访问
-Microsoft Graph。
+覆盖匿名 health、Bearer 缺失/格式错误、无效 signature、过期/`nbf`、错误
+audience、issuer/tenant、token version、缺少 scope，以及有效 Alice/Bob claims。
+`test_mcp.py` 继续用本地 Streamable HTTP MCP Server 验证原有 Agent/MCP integration。
+
+## 参考资料
+
+- [Microsoft identity platform access tokens](https://learn.microsoft.com/en-us/entra/identity-platform/access-tokens)
+- [Expose a web API scope](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-configure-app-expose-web-apis)
+- [Configure a client to access a web API](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-configure-app-access-web-apis)
+- [Configure a desktop public client and redirect URI](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-desktop-app-configuration)
+- [MSAL Python interactive token acquisition](https://learn.microsoft.com/en-us/entra/msal/python/getting-started/acquiring-tokens)
+- [Microsoft Graph application manifest reference](https://learn.microsoft.com/en-us/entra/identity-platform/reference-microsoft-graph-app-manifest)
+- [List delegated permission grants](https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-list?view=graph-rest-1.0)
+- [Remove-MgOauth2PermissionGrant](https://learn.microsoft.com/en-us/powershell/module/microsoft.graph.identity.signins/remove-mgoauth2permissiongrant?view=graph-powershell-1.0)
+- [PyJWT API reference](https://pyjwt.readthedocs.io/en/stable/api.html)
