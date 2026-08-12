@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from work_assistant.config import Settings
-from work_assistant.llm import create_chat_model
+from work_assistant.llm import create_chat_model_client
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 API_CLIENT_ID = "22222222-2222-2222-2222-222222222222"
@@ -41,7 +41,7 @@ def test_llm_configuration_accepts_openai_compatible_endpoint(
     assert str(settings.entra_work_assistant_api_client_id) == API_CLIENT_ID
     assert settings.entra_required_scope == "access_as_user"
 
-    model = create_chat_model(settings)
+    model = create_chat_model_client(settings)
     assert model.model_name == "tool-model"
     assert model.use_responses_api is False
     assert model.reasoning_effort is None
@@ -65,7 +65,7 @@ def test_gpt_5_6_uses_chat_completions_compatible_reasoning_effort(
     monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.setenv("LLM_MODEL", "gpt-5.6-terra")
 
-    model = create_chat_model(Settings())
+    model = create_chat_model_client(Settings())
 
     assert model.use_responses_api is False
     assert model.reasoning_effort == "none"

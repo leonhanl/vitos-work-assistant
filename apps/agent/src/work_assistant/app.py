@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Any, Protocol
+from contextlib import asynccontextmanager
+from typing import Protocol
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -13,7 +12,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from work_assistant.agent import AgentService, AgentServiceError
 from work_assistant.auth import CurrentUser, get_current_user
 from work_assistant.config import Settings
-from work_assistant.mcp import M365MCPClient, MCPConnectionError
+from work_assistant.mcp import M365MCPClient
 from work_assistant.models import ChatRequest, ChatResponse
 
 logging.basicConfig(
@@ -24,47 +23,31 @@ logger = logging.getLogger(__name__)
 
 
 class ChatService(Protocol):
+    """The one method FastAPI needs from the Agent service."""
+
     async def chat(self, thread_id: str, message: str) -> ChatResponse: ...
 
 
-ServiceFactory = Callable[[], AbstractAsyncContextManager[ChatService]]
-CurrentUserDependency = Callable[..., Any]
+def create_app(chat_service: ChatService | None = None) -> FastAPI:
+    """Create the API; tests may pass a small fake chat service."""
 
-
-@asynccontextmanager
-async def agent_service_context() -> AsyncIterator[ChatService]:
-    settings = Settings()
-    mcp_client = M365MCPClient(settings)
-    try:
-        tools = await mcp_client.connect()
-        yield AgentService(settings, tools)
-    finally:
-        await mcp_client.close()
-
-
-def create_app(
-    service_factory: ServiceFactory = agent_service_context,
-    current_user_dependency: CurrentUserDependency = get_current_user,
-) -> FastAPI:
     @asynccontextmanager
-    async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-        application.state.chat_service = None
-        application.state.startup_error = None
-        context = service_factory()
-        try:
-            service = await context.__aenter__()
-        except Exception as exc:
-            error = _startup_error(exc)
-            application.state.startup_error = error
-            logger.error("Agent startup failed (%s)", type(exc).__name__)
+    async def lifespan(application: FastAPI):
+        # A supplied service keeps HTTP tests independent from MCP and the LLM.
+        if chat_service is not None:
+            application.state.chat_service = chat_service
             yield
-        else:
-            application.state.chat_service = service
-            try:
-                yield
-            finally:
-                application.state.chat_service = None
-                await context.__aexit__(None, None, None)
+            return
+
+        settings = Settings()
+        mcp_client = M365MCPClient(settings)
+        try:
+            tools = await mcp_client.connect()
+            application.state.chat_service = AgentService(settings, tools)
+            yield
+        finally:
+            application.state.chat_service = None
+            await mcp_client.close()
 
     application = FastAPI(
         title="Vito's Work Assistant API",
@@ -78,7 +61,7 @@ def create_app(
 
     @application.get("/me", response_model=CurrentUser)
     async def me(
-        current_user: CurrentUser = Depends(current_user_dependency),
+        current_user: CurrentUser = Depends(get_current_user),
     ) -> CurrentUser:
         return current_user
 
@@ -86,15 +69,11 @@ def create_app(
     async def chat(
         payload: ChatRequest,
         request: Request,
-        current_user: CurrentUser = Depends(current_user_dependency),
+        _current_user: CurrentUser = Depends(get_current_user),
     ) -> ChatResponse:
         thread_id = payload.thread_id or str(uuid4())
         logger.info("Chat request started", extra={"thread_id": thread_id})
-        service: ChatService | None = request.app.state.chat_service
-        if service is None:
-            error: AgentServiceError = request.app.state.startup_error
-            logger.warning("Chat request rejected: service unavailable")
-            raise _http_error(error)
+        service: ChatService = request.app.state.chat_service
         try:
             response = await service.chat(thread_id, payload.message)
             logger.info("Chat request succeeded", extra={"thread_id": thread_id})
@@ -120,28 +99,6 @@ def create_app(
             ) from None
 
     return application
-
-
-def _startup_error(exc: Exception) -> AgentServiceError:
-    if isinstance(exc, AgentServiceError):
-        return exc
-    if isinstance(exc, MCPConnectionError):
-        return AgentServiceError(
-            503,
-            "mcp_unavailable",
-            "The Microsoft 365 knowledge service could not be reached.",
-        )
-    if type(exc).__name__ == "ValidationError":
-        return AgentServiceError(
-            503,
-            "configuration_error",
-            "The Agent API is missing or has invalid LLM configuration.",
-        )
-    return AgentServiceError(
-        503,
-        "service_unavailable",
-        "The Agent API could not be initialized.",
-    )
 
 
 def _http_error(error: AgentServiceError) -> HTTPException:

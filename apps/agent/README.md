@@ -51,7 +51,8 @@ Token A → Work Assistant → OBO → Graph Token B → m365-mcp-http
 - `auth.py`：Bearer 提取、tenant-specific OIDC metadata/JWKS、Token A 验证、scope
   验证及 `CurrentUser`。
 - `config.py`：验证 LLM、Entra API 与 MCP endpoint 配置。
-- `app.py`：匿名 `GET /health`，受保护的 `GET /me` 和 `POST /chat`。
+- `app.py`：用一个简单 lifespan 创建共享 Agent/MCP 资源，并提供匿名 `GET /health`、
+  受保护的 `GET /me` 和 `POST /chat`。配置或 MCP 连接失败时应用直接启动失败。
 - `llm.py`：构建可配置 `base_url` 的 LangChain `ChatOpenAI`。
 - `mcp.py`：在 FastAPI 生命周期内保持 Streamable HTTP MCP session，只加载
   `search_sharepoint` 与 `read_document`。
@@ -497,8 +498,9 @@ python -m pytest apps/agent/tests
 ```
 
 覆盖匿名 health、Bearer 缺失/格式错误、无效 signature、过期/`nbf`、错误
-audience、issuer/tenant、token version、缺少 scope，以及有效 Alice/Bob claims。
-`test_mcp.py` 继续用本地 Streamable HTTP MCP Server 验证原有 Agent/MCP integration。
+audience、issuer/tenant、token version、缺少 scope、有效 Alice/Bob claims、Agent 的
+关键构造参数与调用输入，以及启动失败时的资源清理。`test_mcp.py` 使用本地
+Streamable HTTP MCP Server 验证 Agent/MCP integration。
 
 ## 参考资料
 

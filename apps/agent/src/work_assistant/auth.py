@@ -231,22 +231,10 @@ class EntraTokenValidator:
 
 
 @lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    return Settings()
-
-
-@lru_cache(maxsize=4)
-def _cached_validator(
-    tenant_id: str,
-    audience: str,
-    required_scope: str,
-) -> EntraTokenValidator:
-    return EntraTokenValidator(tenant_id, audience, required_scope)
-
-
 def get_token_validator() -> EntraTokenValidator:
-    settings = get_settings()
-    return _cached_validator(
+    """Create one validator and reuse its cached Entra signing keys."""
+    settings = Settings()
+    return EntraTokenValidator(
         str(settings.entra_tenant_id),
         str(settings.entra_work_assistant_api_client_id),
         settings.entra_required_scope,

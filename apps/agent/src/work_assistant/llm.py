@@ -7,8 +7,8 @@ from langchain_openai import ChatOpenAI
 from work_assistant.config import Settings
 
 
-def create_chat_model(settings: Settings) -> ChatOpenAI:
-    """Create the common Chat Completions + tool-calling client."""
+def create_chat_model_client(settings: Settings) -> ChatOpenAI:
+    """Create the LangChain client used to call the configured chat model."""
     compatibility_options: dict[str, Any] = {}
     if _is_gpt_5_6(settings.llm_model):
         # GPT-5.6 defaults to reasoning effort "medium", while its Chat

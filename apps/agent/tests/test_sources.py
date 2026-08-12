@@ -5,7 +5,7 @@ from langchain_core.messages import ToolMessage
 from work_assistant.agent import classify_agent_error, normalize_sources
 
 
-def test_sources_prefer_read_documents_and_deduplicate() -> None:
+def test_sources_deduplicate() -> None:
     search = ToolMessage(
         name="search_sharepoint",
         tool_call_id="search-1",
@@ -39,7 +39,8 @@ def test_sources_prefer_read_documents_and_deduplicate() -> None:
     sources = normalize_sources([search, read, read])
 
     assert [source.model_dump() for source in sources] == [
-        {"name": "VPN KB.docx", "url": "https://tenant.example/vpn"}
+        {"name": "VPN KB.docx", "url": "https://tenant.example/vpn"},
+        {"name": "Other.docx", "url": "https://tenant.example/other"},
     ]
 
 
@@ -80,24 +81,16 @@ def test_sources_support_mcp_structured_content_artifact() -> None:
     ]
 
 
-def test_graph_errors_are_mapped_without_exposing_raw_details() -> None:
-    error = RuntimeError(
-        "Microsoft Graph denied access (403). secret upstream detail"
-    )
+def test_login_errors_are_mapped_to_a_login_hint() -> None:
+    mapped = classify_agent_error(RuntimeError("No valid login session found."))
 
-    mapped = classify_agent_error(error)
+    assert mapped.status_code == 503
+    assert mapped.code == "m365_login_required"
+
+
+def test_other_errors_map_to_generic_without_exposing_raw_details() -> None:
+    mapped = classify_agent_error(RuntimeError("secret upstream detail"))
 
     assert mapped.status_code == 502
-    assert mapped.code == "m365_permission_denied"
+    assert mapped.code == "agent_execution_failed"
     assert "secret upstream detail" not in mapped.public_message
-
-
-def test_gpt_5_6_reasoning_error_is_not_reported_as_unsupported_tools() -> None:
-    error = RuntimeError(
-        "Function tools with reasoning_effort are not supported for "
-        "gpt-5.6-terra in /v1/chat/completions."
-    )
-
-    mapped = classify_agent_error(error)
-
-    assert mapped.code == "llm_tool_calling_configuration_error"

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -11,7 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
 import work_assistant.auth as auth_module
-from work_assistant.app import ChatService, create_app
+from work_assistant.app import create_app
 from work_assistant.auth import EntraTokenValidator, ValidationContext
 from work_assistant.models import ChatResponse
 
@@ -24,11 +22,6 @@ GRAPH_AUDIENCE = "00000003-0000-0000-c000-000000000000"
 class FakeAgent:
     async def chat(self, thread_id: str, message: str) -> ChatResponse:
         return ChatResponse(thread_id=thread_id, answer=f"answer: {message}")
-
-
-@asynccontextmanager
-async def fake_service() -> AsyncIterator[ChatService]:
-    yield FakeAgent()
 
 
 class StaticKeyValidator(EntraTokenValidator):
@@ -78,7 +71,7 @@ def _client(
     validator: StaticKeyValidator,
 ) -> TestClient:
     monkeypatch.setattr(auth_module, "get_token_validator", lambda: validator)
-    return TestClient(create_app(fake_service))
+    return TestClient(create_app(FakeAgent()))
 
 
 def test_missing_bearer_token_returns_401(
