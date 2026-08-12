@@ -181,6 +181,9 @@ cython_debug/
 .vscode/
 .DS_Store
 
+# Node / Vite
+node_modules/
+
 
 
 

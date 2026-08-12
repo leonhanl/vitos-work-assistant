@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Completing Microsoft sign-in</title>
+  </head>
+  <body>
+    <p>Completing Microsoft sign-in…</p>
+    <script type="module">
+      import { broadcastResponseToMainFrame } from "@azure/msal-browser/redirect-bridge";
+
+      broadcastResponseToMainFrame().catch(() => {
+        document.body.textContent = "Microsoft sign-in could not be completed. Return to the app and try again.";
+      });
+    </script>
+  </body>
+</html>

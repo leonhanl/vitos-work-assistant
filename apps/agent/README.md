@@ -1,8 +1,9 @@
 # Vito's Work Assistant Agent API
 
-这是一个仅 API 的企业 Assistant Demo。FastAPI 现在是 Microsoft Entra 单租户、
-多用户认证的 Web API；Alice 和 Bob 使用各自的 **Token A** 调用受保护 endpoint。
-DeepAgent 仍通过 Streamable HTTP 连接独立运行的 `services/m365-mcp-http`。
+这是 Vito's Work Assistant 的后端说明。FastAPI 是 Microsoft Entra 单租户、多用户认证
+的 Web API；`apps/web` 中的 Vanilla JavaScript SPA 让 Alice 和 Bob 使用各自的
+**Token A** 调用受保护 endpoint。DeepAgent 仍通过 Streamable HTTP 连接独立运行的
+`services/m365-mcp-http`。
 
 ## 当前认证架构与安全边界
 
@@ -81,9 +82,9 @@ Vito tenant 中手工创建两个 **Accounts in this organizational directory on
 
 ```text
 vitos-work-assistant-client                 vitos-work-assistant-api
-Python public client / future frontend  →  FastAPI backend + DeepAgent
+Browser SPA / optional Python test client → FastAPI backend + DeepAgent
 发起用户登录并取得 Token A                  暴露 scope 并验证 Token A
-需要 redirect URI                           当前不需要 redirect URI
+SPA 需要 redirect URI                       当前不需要 redirect URI
 ```
 
 `vitos-work-assistant-api` 不是单独代表 LLM 或 DeepAgent，而是代表包含 Authentication、
@@ -188,11 +189,13 @@ Microsoft Graph permission  = none（本阶段）
 permissions 中移除；Work Assistant 对 Graph 的访问仍由独立的 m365-mcp-http App
 Registration 和 Device Code identity 完成。
 
-### 1.2 `vitos-work-assistant-client`（Python public client）
+### 1.2 `vitos-work-assistant-client`（Browser SPA public client）
 
-这个 registration 当前代表 `examples/entra_test_client.py`。它负责打开浏览器让 Alice
-或 Bob 登录、接收 Entra 返回的 authorization code、取得 Token A，然后调用 `/me`
+这个 registration 主要代表 `apps/web`。它使用 MSAL Browser v5 的
+Authorization Code + PKCE flow，让 Alice/Bob 登录、取得 Token A，然后调用 `/me`
 和 `/chat`。它不运行 Agent，也不直接调用 Microsoft Graph。
+`examples/entra_test_client.py` 仍可作为可选的后端开发诊断工具；只有要运行该脚本时
+才需要额外的 desktop platform 配置。
 
 #### A. 创建 registration
 
@@ -208,30 +211,28 @@ Registration 和 Device Code identity 完成。
 
 | README 占位符 | Portal 中的值 | 用途 |
 |---|---|---|
-| `<TEST_CLIENT_ID>` | Application (client) ID | MSAL public client ID |
+| `<WEB_CLIENT_ID>` | Application (client) ID | MSAL Browser public client ID |
 | `<TENANT_ID>` | Directory (tenant) ID | 必须与 API registration 相同 |
 
 进入 **Owners → Add owners**，添加与 API registration 相同的 Owner。不要进入
-Certificates & secrets 创建 client secret；Python test client 是 public client，不能
-安全保存 secret。
+Certificates & secrets 创建 client secret；Browser SPA 是 public client，不能安全
+保存 secret。
 
-#### B. 配置 interactive login redirect
+#### B. 配置 SPA redirect
 
-进入 **Authentication → Add a platform → Mobile and desktop applications**：
+进入 **Authentication → Add a platform → Single-page application**：
 
-1. 添加或选择 redirect URI `http://localhost`。
+1. 添加 redirect URI `http://localhost:5173/redirect.html`。
 2. 点击 **Configure** / **Save**。
-3. 在 Authentication 页面的 **Advanced settings** 中，将
-   **Allow public client flows** 设置为 `Yes` 并保存。
+3. 不要启用 implicit grant 的 access token / ID token 选项。
 
-这里的 `http://localhost` 不是 Work Assistant API 地址。MSAL Python 登录时会在本机
-启动临时 loopback listener；Entra 登录完成后，只把 authorization response/code
-返回到这个预先登记的可信 redirect URI。MSAL 随后使用 Authorization Code + PKCE
-取得 Token A。
+这个 URI 必须精确匹配 `apps/web` 中的 MSAL v5 redirect bridge。开发主页仍是
+`http://localhost:5173`；bridge 只处理 authentication response。生产环境应增加实际
+HTTPS bridge URI，并让 hosting 对 bridge 返回 `Cache-Control: no-store`。
 
-未来如果换成 React SPA，需要另外添加 **Single-page application** platform，并登记
-实际 frontend callback，例如 `http://localhost:3000/auth/callback` 与生产 HTTPS
-callback；不要把当前 desktop `http://localhost` 配置机械复制到生产环境。
+可选：若仍需运行 `examples/entra_test_client.py`，再添加 **Mobile and desktop
+applications** platform 的 `http://localhost`，并把 **Allow public client flows** 设为
+`Yes`。Web UI 本身不需要这个 desktop redirect 或开关。
 
 #### C. 给 client 添加 API delegated permission
 
@@ -262,21 +263,22 @@ tenant，且当前账号是两个 registration 的 Owner。若 tenant 禁止 use
 
 ```text
 Supported account types       = Current organization only
-Application type              = Public client / mobile and desktop
-Redirect URI                  = http://localhost
-Allow public client flows     = Yes
+Application type              = Single-page application / public client
+Redirect URI                  = http://localhost:5173/redirect.html
+Implicit grant                = disabled
 Client secret/certificate     = none
 Delegated API permission      = vitos-work-assistant-api / access_as_user
 Microsoft Graph permissions   = none
 ```
 
-Test Client 请求的唯一业务 scope 是：
+Web UI 请求的唯一业务 scope 是：
 
 ```text
 api://<WORK_ASSISTANT_API_CLIENT_ID>/access_as_user
 ```
 
-最终把三个 ID 写入 `apps/agent/.env`。API client ID 和 Test Client ID 是两个不同值：
+后端只需要 tenant ID 与 API client ID。Web client ID 应写入 `apps/web/.env`，不要和
+API client ID 混用。可选 Python test client 才读取 `ENTRA_TEST_CLIENT_ID`：
 
 ```dotenv
 ENTRA_TENANT_ID=<两个 registrations 共同的 Directory tenant ID>
@@ -286,12 +288,14 @@ ENTRA_TEST_CLIENT_ID=<vitos-work-assistant-client Application client ID>
 WORK_ASSISTANT_API_URL=http://127.0.0.1:8000
 ```
 
-不要把 `api://...` 填进 `ENTRA_WORK_ASSISTANT_API_CLIENT_ID`；该变量只接受 GUID。
-Test Client 会用它自动构造上面的完整 scope URI。
+Web 配置与完整 SPA 手工步骤见仓库根
+[`README.md`](../../README.md)。不要把 `api://...` 填进后端的
+`ENTRA_WORK_ASSISTANT_API_CLIENT_ID`；该变量只接受 GUID。
 
 ### Token version 与验证方式
 
-Test Client 使用 tenant-specific v2 authority；API 使用以下 tenant-specific metadata：
+Web UI 与可选 Test Client 都使用 tenant-specific v2 authority；API 使用以下
+tenant-specific metadata：
 
 ```text
 https://login.microsoftonline.com/<TENANT_ID>/v2.0/.well-known/openid-configuration

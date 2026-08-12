@@ -1,72 +1,366 @@
 # Vito's Work Assistant
 
-Vito's Work Assistant 是一个面向企业场景的 AI Assistant 项目。仓库按 monorepo
-组织：Agent 与 Web 应用放在 `apps/`，外部系统的 MCP Server 放在 `services/`，
-可复用代码放在 `libs/`，部署配置放在 `infra/`。
+Vito's Work Assistant 是一个学习型企业 AI Assistant Demo。它现在包含一个极简
+Vanilla JavaScript Web UI、Microsoft Entra 单租户登录、受 Token A 保护的 FastAPI，
+以及既有的 DeepAgent → Streamable HTTP MCP → Microsoft Graph 链路。
+
+## 当前架构
+
+```text
+Browser / Vanilla JS Web UI
+   │
+   │ Entra login（Authorization Code + PKCE）
+   ▼
+Microsoft Entra ID
+   │
+   │ Token A: Work Assistant API / access_as_user
+   ▼
+Web UI
+   │
+   │ Authorization: Bearer <Token A>
+   ▼
+Work Assistant FastAPI
+   │ validate signature / issuer / tenant / audience / exp / nbf / scope
+   │ CurrentUser = tid + oid；username 仅用于显示和日志
+   ▼
+DeepAgent
+   │
+   │ Streamable HTTP（不传 Token A）
+   ▼
+m365-mcp-http
+   │
+   │ existing Device Code identity
+   ▼
+Microsoft Graph
+```
+
+身份边界必须明确：
+
+```text
+Frontend identity = 当前 Alice / Bob
+API identity      = 当前 Alice / Bob
+Graph identity    = m365-mcp-http token cache 中的共享 Device Code 用户
+```
+
+因此 Alice 和 Bob 的 Token A 能让 API 区分两人，但 SharePoint 搜索结果与权限仍基于
+同一个 MCP Device Code 用户，并不基于 Alice/Bob 自己的 Graph ACL。本阶段没有 OBO、
+Graph Token B、Graph `/me`、MCP OAuth 或 per-user Graph identity。
 
 ## 项目结构
 
 ```text
 vitos-work-assistant/
 ├── apps/
-│   ├── web/                  # Web 应用（待实现）
-│   └── agent/                # DeepAgent + MCP + Skill HTTP API
+│   ├── web/                  # Vite + Vanilla JS + MSAL Browser
+│   └── agent/                # FastAPI + Token A validation + DeepAgent
 ├── services/
-│   ├── m365-mcp-http/        # Microsoft 365 Streamable HTTP MCP Server
-│   └── salesforce-mcp/       # Salesforce MCP Server（待实现）
-├── libs/
-│   └── common/               # 跨应用共享代码（待实现）
-├── infra/                    # 部署与基础设施配置（待实现）
-├── docker-compose.yml
-├── .env.example
-└── README.md
+│   ├── m365-mcp-http/        # Streamable HTTP MCP + Device Code Flow
+│   └── salesforce-mcp/       # 占位；本阶段未实现
+├── libs/                     # 占位
+└── infra/                    # 占位
 ```
 
-当前实现了 [`services/m365-mcp-http`](services/m365-mcp-http/README.md) 与最小版
-[`apps/agent`](apps/agent/README.md)。M365 MCP 提供：
+API contract 保持不变：
 
-- `search_sharepoint`：使用 Microsoft Graph Search 搜索当前用户可访问的文档。
-- `read_document`：下载并提取 DOCX、UTF-8 TXT 或 Markdown 正文。
+```http
+GET  /health    anonymous
+GET  /me        Bearer Token A required
+POST /chat      Bearer Token A required
+```
 
-M365 MCP 现在作为独立的 Streamable HTTP 服务运行，默认 endpoint 是
-`http://127.0.0.1:8001/mcp`。`apps/agent` 通过持久的 Streamable HTTP MCP client
-连接该 endpoint，不再 spawn 本地 stdio subprocess。Agent API 使用 Microsoft Entra
-Token A 保护 `GET /me` 与 `POST /chat`；`GET /health` 保持匿名。
+`POST /chat` request：
 
-当前身份边界是：Alice/Bob 的 Token A 只认证 Work Assistant API。下游
-`m365-mcp-http` 仍使用 Device Code cache 中的同一个 Microsoft 365 用户访问 Graph，
-Agent 不向 MCP 转发 Token A；OBO、Graph Token B 与 per-user Graph access 尚未实现。
-Web、Salesforce MCP 和基础设施目录仍是边界清晰的占位。
+```json
+{
+  "message": "How do I connect to VPN?",
+  "thread_id": "optional-page-local-thread-id"
+}
+```
 
-## 当前模块快速开始
+response：
+
+```json
+{
+  "thread_id": "...",
+  "answer": "...",
+  "sources": [{ "name": "KB003 - Corporate VPN", "url": "https://..." }]
+}
+```
+
+## 1. 手工配置 Microsoft Entra
+
+代码不会用 Azure CLI、PowerShell、Terraform 或 Graph API 创建 registration。请在
+同一个 Vito tenant 中手工创建两个 **Accounts in this organizational directory only**
+应用。
+
+### 1.1 `vitos-work-assistant-api`
+
+进入 **Microsoft Entra admin center → Identity → Applications → App registrations →
+New registration**：
+
+1. Name 填 `vitos-work-assistant-api`。
+2. Supported account types 选当前组织目录；Redirect URI 留空。
+3. 在 Overview 记录 **Directory (tenant) ID** 和 API 的 **Application (client) ID**。
+4. 进入 **Expose an API**，设置 Application ID URI：
+
+   ```text
+   api://<WORK_ASSISTANT_API_CLIENT_ID>
+   ```
+
+5. 在同一页面添加 delegated scope：
+
+   ```text
+   Scope name: access_as_user
+   Who can consent: Admins only
+   State: Enabled
+   ```
+
+   建议 display name 使用 `Access Vito's Work Assistant as the signed-in user`。完整 scope
+   必须是：
+
+   ```text
+   api://<WORK_ASSISTANT_API_CLIENT_ID>/access_as_user
+   ```
+
+6. 进入 **Manifest**，在已有 `api` 对象内将 `requestedAccessTokenVersion` 设为数字
+   `2`；不要覆盖 portal 刚创建的 `oauth2PermissionScopes`。
+
+7. 进入 **API permissions**。如果新 registration 自动带有 Microsoft Graph
+   `User.Read`，将它删除；完成后这里应没有任何 Microsoft Graph permission。
+
+API registration 本阶段不需要 redirect URI、client secret、certificate 或 Microsoft
+Graph permission。`Admins only` 不会删除 `access_as_user` scope 或后端的 scope 校验；它只
+是不允许普通用户自行批准权限，权限必须由企业管理员在应用交付前统一批准。
+
+### 1.2 `vitos-work-assistant-client`
+
+再次进入 **App registrations → New registration**：
+
+1. Name 填 `vitos-work-assistant-client`。
+2. Supported account types 选当前组织目录。
+3. 进入 **Authentication → Add a platform → Single-page application**，精确添加：
+
+   ```text
+   http://localhost:5173/redirect.html
+   ```
+
+   当前 MSAL Browser v5 使用这个专用 redirect bridge 页面处理登录、silent iframe 和
+   logout return。URI 的 scheme、host、port、path 必须完全一致。不要把它登记成 Web
+   platform；不要启用 implicit grant 的 access token / ID token 复选框。生产部署应增加
+   对应的 HTTPS redirect URI，并对 bridge 页面返回 `Cache-Control: no-store`。
+
+4. 进入 **API permissions → Add a permission → My APIs**，选择
+   `vitos-work-assistant-api` → **Delegated permissions** → `access_as_user` →
+   **Add permissions**。
+5. 仍在 **API permissions** 页面，由管理员点击 **Grant admin consent for
+   `<tenant>`**。确认 `access_as_user` 的 Status 显示为已为当前 tenant 授予，而不是等待
+   Alice/Bob 首次登录时自行 consent。
+6. 回到 `vitos-work-assistant-api` → **Expose an API → Authorized client
+   applications → Add a client application**，填写
+   `vitos-work-assistant-client` 的 Application (client) ID，勾选 `access_as_user` 并保存。
+   这会把 SPA 写入 API 的 `preAuthorizedApplications`，明确预授权这个受信任的企业客户端。
+
+若 API 未出现在 **My APIs**，确认两个 registration 位于同一 tenant，并让当前配置人员
+成为两个 registration 的 Owner。不要把 SPA Client ID 加入 API manifest 的
+`knownClientApplications`；该字段用于 bundled consent，当前 API 不代表 Alice/Bob 调用
+下游 Graph，不需要捆绑两个应用的权限。API manifest 中的 `knownClientApplications` 应
+保持空数组。
+
+以上是本项目的默认企业部署策略：管理员预先审核 scope、授予 tenant-wide admin
+consent，并由 API owner 预授权 SPA。普通用户只进行 Entra SSO，不应看到
+**Permissions requested** 页面。管理员 consent 只批准客户端代表用户调用 API；后端仍会
+验证 Token A 的 tenant、audience、签名、有效期与 `scp=access_as_user`。
+
+如果只允许部分员工使用，再进入 **Enterprise applications** 中对应的 client enterprise
+application，将 **Assignment required?** 设为 **Yes**，并分配允许使用的用户或安全组；
+tenant-wide admin consent 本身不等于向所有员工开放业务访问。
+
+SPA 是 public client，不能安全保存 credential。不要创建或放入前端 client secret、
+certificate、Graph token、refresh token、backend secret 或 OBO secret。Tenant ID 与
+client ID 属于公开客户端配置，不是 confidential secret。
+
+## 2. 安装 Python 服务
+
+需要 Python 3.11+：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e "./services/m365-mcp-http[dev]"
 python -m pip install -e "./apps/agent[dev]"
+```
 
+### 启动 m365-mcp-http
+
+```bash
 cp services/m365-mcp-http/.env.example services/m365-mcp-http/.env
-# 编辑 .env，填写 M365_TENANT_ID 和 M365_CLIENT_ID
+# 编辑 .env，填写 MCP 自己的 M365_TENANT_ID / M365_CLIENT_ID
 set -a
 source services/m365-mcp-http/.env
 set +a
-
 python -m m365_mcp.auth login
-# 保持这个独立服务运行；另一个终端再启动 Agent API
 python -m m365_mcp.server
 ```
 
-完整 Entra/MCP Server 配置见
-[`services/m365-mcp-http/README.md`](services/m365-mcp-http/README.md)。Work Assistant
-API 所需的两个 Entra App Registration、Token A 验证、Agent 环境变量、MSAL Python
-Alice/Bob 测试及启动步骤见 [`apps/agent/README.md`](apps/agent/README.md)。
+最后一条命令在终端 A 持续运行，默认 endpoint 是
+`http://127.0.0.1:8001/mcp`。完整配置见
+[`services/m365-mcp-http/README.md`](services/m365-mcp-http/README.md)。
 
-## 测试
+### 启动 Work Assistant API
 
-从仓库根目录运行：
+在终端 B：
 
 ```bash
-python -m pytest services/m365-mcp-http/tests
-python -m pytest apps/agent/tests
+source .venv/bin/activate
+cp apps/agent/.env.example apps/agent/.env
+# 编辑 LLM 与 Entra API 配置
+set -a
+source apps/agent/.env
+set +a
+uvicorn work_assistant.app:app --reload --host 127.0.0.1 --port 8000
 ```
+
+关键值：
+
+```dotenv
+ENTRA_TENANT_ID=<Directory tenant ID>
+ENTRA_WORK_ASSISTANT_API_CLIENT_ID=<vitos-work-assistant-api Application client ID>
+ENTRA_REQUIRED_SCOPE=access_as_user
+M365_MCP_URL=http://127.0.0.1:8001/mcp
+```
+
+`GET http://127.0.0.1:8000/health` 应匿名返回 `{"status":"ok"}`；没有 Bearer 的
+`POST /chat` 和 `GET /me` 应返回 `401`。更多后端说明见
+[`apps/agent/README.md`](apps/agent/README.md)。
+
+## 3. 启动 Web UI
+
+需要 Node.js 20.19+ 或 22.12+。在终端 C：
+
+```bash
+cd apps/web
+npm install
+cp .env.example .env
+# 编辑 .env，填写三个 ID 与完整 API scope
+npm run dev
+```
+
+`apps/web/.env` 示例：
+
+```dotenv
+VITE_ENTRA_TENANT_ID=<Directory tenant ID>
+VITE_ENTRA_CLIENT_ID=<vitos-work-assistant-client Application client ID>
+VITE_WORK_ASSISTANT_API_CLIENT_ID=<vitos-work-assistant-api Application client ID>
+VITE_WORK_ASSISTANT_API_SCOPE=api://<WORK_ASSISTANT_API_CLIENT_ID>/access_as_user
+```
+
+打开 `http://localhost:5173`。开发环境使用同源路径：
+
+```text
+/api/me   → http://127.0.0.1:8000/me
+/api/chat → http://127.0.0.1:8000/chat
+```
+
+Vite proxy 会显式删除 `/api`，所以本地开发不需要 FastAPI CORS。`npm run build` 生成
+静态产物；`npm run preview` 只预览静态构建，生产环境仍需由实际 hosting 将 `/api/*`
+路由到 FastAPI（本阶段不实现生产 reverse proxy）。
+
+## 4. Alice / Bob 手工验证
+
+### Alice 登录与 `/me`
+
+1. 打开 `http://localhost:5173`，点击 **Sign in with Microsoft**。
+2. 使用 Alice 登录。Alice 可以完成账号选择、密码、MFA 或 Conditional Access，但不应
+   看到 **Permissions requested** 用户 consent 页面。
+3. 页面应显示 `account.name` / `account.username`，并轻量显示
+   `API authenticated as alice@...`。
+4. 浏览器实际调用 `GET /api/me`；后端返回 Alice 的 `oid`、tenant `tid` 与 username。
+
+如果仍然出现 **Permissions requested (1 of 2 apps)** / **(2 of 2 apps)**，依次检查：
+
+1. client 的 `access_as_user` 是否已经显示 admin consent granted；
+2. client 和 API registration 的 **API permissions** 中是否残留 Microsoft Graph
+   `User.Read`；当前项目两边都不需要它；
+3. API 的 **Authorized client applications** 是否包含正确的 SPA Client ID 和
+   `access_as_user` permission；
+4. API manifest 的 `knownClientApplications` 是否误填了 SPA Client ID；本项目应为空。
+
+管理员以后新增或改变 delegated permission 时，必须先重新审核并授予 admin consent，
+再让普通用户使用新版本，避免把授权决定推给用户。
+
+### Alice `/chat`
+
+输入：
+
+```text
+Python 中 list 和 tuple 有什么区别？
+```
+
+前端在每次 API call 前运行 `acquireTokenSilent`，必要时才 fallback 到
+`acquireTokenRedirect`，然后用 Token A 调用 `POST /api/chat`。页面显示 answer 与后端
+实际返回的 sources，不解析 JWT、不自行刷新或长期保存 access token。
+
+再输入：
+
+```text
+出差的时候怎么访问公司的内部系统？
+```
+
+调用链仍是 Alice Token A → FastAPI identifies Alice → DeepAgent → m365-mcp-http →
+Graph as existing Device Code user。此时 SharePoint ACL 不是 Alice 自己的 ACL。
+
+### Bob 与 Sign out
+
+1. 点击 **Sign out**；页面调用 MSAL `logoutRedirect`，清理 MSAL account/token cache
+   并完成 Entra server sign-out，不只是隐藏用户名。
+2. 再次点击 **Sign in with Microsoft**，选择 Bob。
+3. `/me` 应满足 `Bob oid != Alice oid`、`Bob tid == Alice tid`，username 为 Bob；Bob
+   也可以调用 `/chat`。
+
+## 5. 测试
+
+```bash
+cd apps/web
+npm run build
+
+cd ../..
+python -m pytest apps/agent/tests
+python -m pytest services/m365-mcp-http/tests
+```
+
+后端认证测试使用本地 RSA signing key，不访问真实 Entra、JWKS、Graph 或 LLM，覆盖
+匿名 health、缺 token、无效 token、错误 audience / issuer / tenant、缺 scope，以及
+有效 Alice/Bob identity。
+
+## 已知限制与下一阶段
+
+当前 `thread_id` 只保存在 Agent 进程内存中，刷新页面可以丢失。它尚未绑定
+authenticated `(tid, oid)`；持久化多用户版本必须实现 conversation ownership。
+
+下一阶段 TODO（本阶段未实现）：
+
+```text
+Browser
+   ↓ Token A
+Work Assistant API
+   ↓ OBO
+Graph Token B
+   ↓
+m365-mcp-http
+   ↓
+Microsoft Graph as Alice / Bob
+```
+
+## 官方资料
+
+- [Initialize MSAL Browser](https://learn.microsoft.com/en-us/entra/msal/javascript/browser/initialization)
+- [Sign in users and configure the MSAL v5 redirect bridge](https://learn.microsoft.com/en-us/entra/msal/javascript/browser/login-user)
+- [Acquire a token in a SPA](https://learn.microsoft.com/en-us/entra/identity-platform/scenario-spa-acquire-token)
+- [Sign out users](https://learn.microsoft.com/en-us/entra/msal/javascript/browser/logout)
+- [Microsoft identity platform access tokens](https://learn.microsoft.com/en-us/entra/identity-platform/access-tokens)
+- [Expose a web API scope](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-configure-app-expose-web-apis)
+- [Configure a client to access a web API](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-configure-app-access-web-apis)
+- [Permissions and consent overview](https://learn.microsoft.com/en-us/entra/identity-platform/permissions-consent-overview)
+- [Grant tenant-wide admin consent](https://learn.microsoft.com/en-us/entra/identity/enterprise-apps/grant-admin-consent)
+- [Vite environment variables](https://vite.dev/guide/env-and-mode)
+- [Vite dev server proxy](https://vite.dev/config/server-options.html#server-proxy)

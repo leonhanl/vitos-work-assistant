@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="A minimal AI assistant for work" />
+    <title>Vito's Work Assistant</title>
+  </head>
+  <body>
+    <main id="app" class="app-shell">
+      <section id="loading-view" class="center-card" aria-live="polite">
+        <p>Loading…</p>
+      </section>
+
+      <section id="signed-out-view" class="center-card" hidden>
+        <p class="eyebrow">Vito's</p>
+        <h1>Work Assistant</h1>
+        <p class="tagline">AI assistant for work</p>
+        <button id="sign-in-button" class="primary-button" type="button">
+          Sign in with Microsoft
+        </button>
+        <p id="sign-in-error" class="error-message" role="alert" hidden></p>
+      </section>
+
+      <section id="signed-in-view" class="workspace" hidden>
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Vito's</p>
+            <h1>Work Assistant</h1>
+          </div>
+          <div class="account">
+            <div class="account-copy">
+              <strong id="account-name"></strong>
+              <span id="account-username"></span>
+            </div>
+            <button id="sign-out-button" class="text-button" type="button">
+              Sign out
+            </button>
+          </div>
+        </header>
+
+        <div id="api-identity" class="identity-note" aria-live="polite"></div>
+
+        <section id="messages" class="messages" aria-live="polite" aria-label="Conversation"></section>
+
+        <p id="chat-error" class="error-banner" role="alert" hidden></p>
+
+        <form id="chat-form" class="composer">
+          <label class="sr-only" for="message-input">Ask something</label>
+          <textarea
+            id="message-input"
+            name="message"
+            rows="1"
+            maxlength="20000"
+            placeholder="Ask something…"
+            required
+          ></textarea>
+          <button id="send-button" class="primary-button" type="submit">Send</button>
+        </form>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
