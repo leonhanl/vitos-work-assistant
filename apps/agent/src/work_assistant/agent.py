@@ -43,7 +43,8 @@ SYSTEM_PROMPT = """你是 Vito's Work Assistant。
 
 当问题涉及公司内部知识、IT KB、公司政策、内部流程、操作手册或 Microsoft 365
 中的企业文档时，优先使用可用的企业知识检索能力获取事实依据。不要编造企业内部
-事实；资料不足时明确说明。回答企业知识问题时，引用工具实际返回的文档名称和链接。
+事实；资料不足时明确说明。不要在回答正文中添加 Source、Sources、参考资料或文档
+链接；界面会在回答下方单独展示实际读取过的文档。
 普通常识问题可以直接回答。"""
 
 
@@ -191,11 +192,11 @@ def _content_text(content: Any) -> str:
 
 
 def normalize_sources(messages: Iterable[Any]) -> list[Source]:
-    """Extract {name, web_url} pairs from the two enterprise tool results, deduped."""
+    """Extract deduplicated sources from documents actually read this turn."""
     seen: set[tuple[str, str]] = set()
     sources: list[Source] = []
     for message in messages:
-        if getattr(message, "name", None) not in {"search_sharepoint", "read_document"}:
+        if getattr(message, "name", None) != "read_document":
             continue
         for mapping in _iter_mappings(_tool_data(message)):
             name = mapping.get("name")

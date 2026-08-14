@@ -6,7 +6,7 @@ from work_assistant.agent import classify_agent_error, normalize_sources
 from work_assistant.obo import OboTokenError
 
 
-def test_sources_deduplicate() -> None:
+def test_sources_include_only_documents_actually_read_and_deduplicate() -> None:
     search = ToolMessage(
         name="search_sharepoint",
         tool_call_id="search-1",
@@ -41,7 +41,6 @@ def test_sources_deduplicate() -> None:
 
     assert [source.model_dump() for source in sources] == [
         {"name": "VPN KB.docx", "url": "https://tenant.example/vpn"},
-        {"name": "Other.docx", "url": "https://tenant.example/other"},
     ]
 
 
@@ -52,9 +51,9 @@ def test_sources_ignore_model_text_and_invalid_urls() -> None:
         content='{"name":"Fake","web_url":"https://fake.example"}',
     )
     invalid = ToolMessage(
-        name="search_sharepoint",
-        tool_call_id="search-1",
-        content='[{"name":"Local","web_url":"file:///secret"}]',
+        name="read_document",
+        tool_call_id="read-1",
+        content='{"name":"Local","web_url":"file:///secret"}',
     )
 
     assert normalize_sources([unrelated, invalid]) == []
@@ -62,9 +61,9 @@ def test_sources_ignore_model_text_and_invalid_urls() -> None:
 
 def test_sources_support_mcp_structured_content_artifact() -> None:
     message = ToolMessage(
-        name="search_sharepoint",
-        tool_call_id="search-1",
-        content=[{"type": "text", "text": "search completed"}],
+        name="read_document",
+        tool_call_id="read-1",
+        content=[{"type": "text", "text": "document read"}],
         artifact={
             "structured_content": {
                 "result": [

@@ -31,6 +31,5 @@ summary alone is normally insufficient.
 - Base internal claims on returned search results and document content.
 - If results are absent, inconsistent, or insufficient, say: “目前检索到的企业资料不足以
   确认这个问题。”
-- Cite only document names and `web_url` values actually returned by the tools. Never
-  invent a source or URL.
-
+- Do not append a Source, Sources, references, or document links to the answer body.
+  The application renders sources separately from successful `read_document` results.
