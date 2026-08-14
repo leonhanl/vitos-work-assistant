@@ -325,6 +325,18 @@ Vite proxy 会显式删除 `/api`，所以本地开发不需要 FastAPI CORS。`
 静态产物；`npm run preview` 只预览静态构建，生产环境仍需由实际 hosting 将 `/api/*`
 路由到 FastAPI（本阶段不实现生产 reverse proxy）。
 
+### 一键启动本地手工测试环境
+
+完成上述 Python、前端依赖和三个 `.env` 文件的配置后，可在仓库根目录运行：
+
+```bash
+./scripts/start-local.sh
+```
+
+脚本会按 `m365-mcp` → `Agent` → `Web` 的顺序启动，并等待前一个服务就绪后再启动下一个。
+每次启动会清除 `logs/` 下的旧 `.log` 文件，新日志分别写入 `m365-mcp.log`、`agent.log`
+和 `web.log`。按 `Ctrl+C` 可停止这三个服务。该脚本只拉起手工测试环境，不执行自动化测试。
+
 ## 4. Alice / Bob 手工验证
 
 ### Alice 登录与 `/me`
