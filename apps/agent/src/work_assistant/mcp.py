@@ -68,12 +68,19 @@ class M365MCPClient:
         if self._connected:
             raise RuntimeError("M365 MCP client is already connected")
 
+        headers: dict[str, str] = {}
+        if self._settings.portkey_api_key is not None:
+            headers["x-portkey-api-key"] = (
+                self._settings.portkey_api_key.get_secret_value()
+            )
+
         connection: dict[str, Any] = {
             "transport": "streamable_http",
             "url": str(self._settings.m365_mcp_url),
             # The M365 server is stateless; there is no server-side session to
             # terminate when the Agent process closes its client connection.
             "terminate_on_close": False,
+            **({"headers": headers} if headers else {}),
         }
 
         try:

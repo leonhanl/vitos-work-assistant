@@ -36,6 +36,10 @@ class Settings(BaseSettings):
         default=AnyHttpUrl("http://127.0.0.1:8001/mcp"),
         validation_alias="M365_MCP_URL",
     )
+    portkey_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="PORTKEY_API_KEY",
+    )
 
     @field_validator("llm_model", "entra_required_scope")
     @classmethod
