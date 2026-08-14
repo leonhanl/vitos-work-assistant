@@ -63,11 +63,9 @@ vitos-work-assistant/
 ├── apps/
 │   ├── web/                  # Vite + Vanilla JS + MSAL Browser
 │   └── agent/                # FastAPI + Token A validation + DeepAgent
-├── services/
-│   ├── m365-mcp-http/        # Streamable HTTP MCP + request-scoped Graph token
-│   └── salesforce-mcp/       # 占位；本阶段未实现
-├── libs/                     # 占位
-└── infra/                    # 占位
+└── services/
+    ├── m365-mcp-http/        # Streamable HTTP MCP + request-scoped Graph token
+    └── salesforce-mcp-http/  # 占位；即将实现
 ```
 
 API contract 保持不变：

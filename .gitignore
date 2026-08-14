@@ -176,16 +176,11 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-.env
-
 .vscode/
 .DS_Store
 
 # Node / Vite
 node_modules/
-
-
-
 
 # ignore the temp directory
 temp/
