@@ -4,9 +4,9 @@ FROM python:3.12-slim
 WORKDIR /repo
 
 COPY apps/agent/pyproject.toml apps/agent/pyproject.toml
+COPY apps/agent/src apps/agent/src
 RUN pip install --no-cache-dir -e apps/agent
 
-COPY apps/agent/src apps/agent/src
 COPY apps/agent/skills apps/agent/skills
 
 EXPOSE 8000
