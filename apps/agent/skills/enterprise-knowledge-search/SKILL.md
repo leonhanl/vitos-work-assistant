@@ -13,8 +13,8 @@ enterprise material. Do not add internal facts from general model knowledge.
 1. Rewrite the user's request into a short lexical query. Prefer core nouns, product
    or system names, exact error text, actions, and likely synonyms. Do not simply send
    a long natural-language question.
-2. For example, “我出差的时候怎么访问公司内部系统？” could become `corporate VPN
-   remote access travel` or `VPN remote access`.
+2. For example, "How can I access internal systems while traveling?" could become
+   `corporate VPN remote access travel` or `VPN remote access`.
 3. If the first query has no suitable result, try a meaningfully different synonym or
    narrower query. Stop after at most three searches, and stop earlier when results are
    strong enough.
@@ -29,7 +29,9 @@ summary alone is normally insufficient.
 ## Ground the answer
 
 - Base internal claims on returned search results and document content.
-- If results are absent, inconsistent, or insufficient, say: “目前检索到的企业资料不足以
-  确认这个问题。”
+- Write all user-facing answer text in English, even when the request, search results,
+  or source documents use another language.
+- If results are absent, inconsistent, or insufficient, say: "The available company
+  materials are insufficient to confirm this."
 - Do not append a Source, Sources, references, or document links to the answer body.
   The application renders sources separately from successful `read_document` results.

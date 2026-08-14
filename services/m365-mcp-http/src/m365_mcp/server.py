@@ -74,10 +74,12 @@ mcp = FastMCP(
 
 @mcp.tool()
 async def search_sharepoint(query: str, top: int = 5) -> list[dict[str, Any]]:
-    """搜索当前用户有权访问的 Microsoft 365 / SharePoint 企业文档。
+    """Search enterprise documents accessible to the current Microsoft 365 user.
 
-    适用于 IT KB、公司政策、操作手册、内部文档和产品文档。query 应尽量是
-    简洁的搜索关键词，而不是很长的自然语言问题。结果为空列表表示没有命中。
+    Use this for IT knowledge-base articles, company policies, operating manuals,
+    internal documents, and product documents in SharePoint. Prefer a concise lexical
+    query over a long natural-language question. An empty list means no results were
+    found.
     """
     query = query.strip()
     if not query:
@@ -98,10 +100,10 @@ async def search_sharepoint(query: str, top: int = 5) -> list[dict[str, Any]]:
 
 @mcp.tool()
 async def read_document(drive_id: str, item_id: str) -> dict[str, str | None]:
-    """读取 search_sharepoint 返回的某一篇文档的完整正文。
+    """Read the full text of a document returned by search_sharepoint.
 
-    通常先调用 search_sharepoint 找到候选文档，再将结果中的 drive_id 和
-    item_id 传入本工具。当前支持 DOCX、UTF-8 TXT 和 Markdown，不支持 PDF。
+    Usually call search_sharepoint first, then pass a selected result's drive_id and
+    item_id to this tool. DOCX, UTF-8 TXT, and Markdown are supported; PDF is not.
     """
     drive_id = drive_id.strip()
     item_id = item_id.strip()

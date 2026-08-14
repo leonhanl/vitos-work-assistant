@@ -78,6 +78,8 @@ def test_agent_service_builds_and_invokes_the_expected_deep_agent(
     assert isinstance(options["checkpointer"], InMemorySaver)
     assert options["skills"] == ["/skills/"]
     assert options["subagents"] == []
+    assert options["system_prompt"] == agent_module.SYSTEM_PROMPT
+    assert "Always answer in English" in options["system_prompt"]
 
     assert captured["config"] == {
         "configurable": {"thread_id": "tenant-id:alice-oid:thread-1"}
