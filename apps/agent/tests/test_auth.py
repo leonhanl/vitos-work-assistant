@@ -20,7 +20,7 @@ GRAPH_AUDIENCE = "00000003-0000-0000-c000-000000000000"
 
 
 class FakeAgent:
-    async def chat(self, thread_id: str, message: str) -> ChatResponse:
+    async def chat(self, thread_id: str, message: str, authenticated) -> ChatResponse:
         return ChatResponse(thread_id=thread_id, answer=f"answer: {message}")
 
 

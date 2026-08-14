@@ -14,6 +14,7 @@ def _set_required_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LLM_MODEL", "tool-model")
     monkeypatch.setenv("ENTRA_TENANT_ID", TENANT_ID)
     monkeypatch.setenv("ENTRA_WORK_ASSISTANT_API_CLIENT_ID", API_CLIENT_ID)
+    monkeypatch.setenv("ENTRA_WORK_ASSISTANT_API_CLIENT_SECRET", "test-secret")
 
 
 def test_llm_configuration_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -39,6 +40,10 @@ def test_llm_configuration_accepts_openai_compatible_endpoint(
     assert str(settings.m365_mcp_url) == "http://127.0.0.1:8001/mcp"
     assert str(settings.entra_tenant_id) == TENANT_ID
     assert str(settings.entra_work_assistant_api_client_id) == API_CLIENT_ID
+    assert (
+        settings.entra_work_assistant_api_client_secret.get_secret_value()
+        == "test-secret"
+    )
     assert settings.entra_required_scope == "access_as_user"
 
     model = create_chat_model_client(settings)
@@ -75,6 +80,7 @@ def test_entra_configuration_is_required(monkeypatch: pytest.MonkeyPatch) -> Non
     _set_required_configuration(monkeypatch)
     monkeypatch.delenv("ENTRA_TENANT_ID")
     monkeypatch.delenv("ENTRA_WORK_ASSISTANT_API_CLIENT_ID")
+    monkeypatch.delenv("ENTRA_WORK_ASSISTANT_API_CLIENT_SECRET")
 
     with pytest.raises(ValidationError):
         Settings()

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Annotated, Any
 from urllib.parse import urlparse
@@ -49,6 +49,14 @@ class CurrentUser(BaseModel):
     oid: str
     tid: str
     username: str | None = None
+
+
+@dataclass(frozen=True, repr=False)
+class AuthenticatedRequest:
+    """A validated user and the original Token A used for downstream OBO."""
+
+    user: CurrentUser
+    token_a: str = field(repr=False)
 
 
 class TokenValidationError(RuntimeError):
@@ -241,12 +249,12 @@ def get_token_validator() -> EntraTokenValidator:
     )
 
 
-async def get_current_user(
+async def get_authenticated_request(
     credentials: Annotated[
         HTTPAuthorizationCredentials | None,
         Depends(bearer_scheme),
     ],
-) -> CurrentUser:
+) -> AuthenticatedRequest:
     if credentials is None or credentials.scheme.lower() != "bearer":
         logger.warning("Authentication failed reason=missing_bearer_token")
         raise _unauthorized()
@@ -282,7 +290,17 @@ async def get_current_user(
         user.tid,
         user.username,
     )
-    return user
+    return AuthenticatedRequest(user=user, token_a=credentials.credentials)
+
+
+async def get_current_user(
+    authenticated: Annotated[
+        AuthenticatedRequest,
+        Depends(get_authenticated_request),
+    ],
+) -> CurrentUser:
+    """Return only the public identity; Token A must never enter a response model."""
+    return authenticated.user
 
 
 def _unauthorized() -> HTTPException:

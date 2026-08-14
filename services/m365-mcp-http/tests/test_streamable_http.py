@@ -5,6 +5,7 @@ from typing import Any
 
 import pytest
 import uvicorn
+import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
@@ -15,8 +16,10 @@ from m365_mcp.server import ServerConfig
 class MockGraphClient:
     """Graph boundary used to keep the transport smoke test offline."""
 
-    def __init__(self, *_args: object, **_kwargs: object) -> None:
-        pass
+    seen_tokens: list[str] = []
+
+    def __init__(self, token_provider, **_kwargs: object) -> None:
+        self._token_provider = token_provider
 
     async def __aenter__(self) -> "MockGraphClient":
         return self
@@ -27,6 +30,7 @@ class MockGraphClient:
     async def search_files(
         self, query: str, top: int = 5
     ) -> list[dict[str, Any]]:
+        self.seen_tokens.append(self._token_provider())
         return [
             {
                 "rank": 1,
@@ -60,9 +64,10 @@ def test_streamable_http_lists_and_calls_tools(
     monkeypatch: pytest.MonkeyPatch, free_port: int
 ) -> None:
     monkeypatch.setattr(server_module, "GraphClient", MockGraphClient)
+    MockGraphClient.seen_tokens.clear()
 
     async def run_smoke_test() -> None:
-        app = server_module.mcp.streamable_http_app()
+        app = server_module.create_http_app()
         config = uvicorn.Config(
             app,
             host="127.0.0.1",
@@ -79,23 +84,29 @@ def test_streamable_http_lists_and_calls_tools(
                     await asyncio.sleep(0.01)
 
             endpoint = f"http://127.0.0.1:{free_port}/mcp"
-            async with streamable_http_client(
-                endpoint, terminate_on_close=False
-            ) as (read_stream, write_stream, _):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
+            async with httpx.AsyncClient(
+                headers={"Authorization": "Bearer alice-token-b"}
+            ) as http_client:
+                async with streamable_http_client(
+                    endpoint,
+                    http_client=http_client,
+                    terminate_on_close=False,
+                ) as (read_stream, write_stream, _):
+                    async with ClientSession(read_stream, write_stream) as session:
+                        await session.initialize()
 
-                    listed = await session.list_tools()
-                    assert {tool.name for tool in listed.tools} == {
-                        "search_sharepoint",
-                        "read_document",
-                    }
+                        listed = await session.list_tools()
+                        assert {tool.name for tool in listed.tools} == {
+                            "search_sharepoint",
+                            "read_document",
+                        }
 
-                    called = await session.call_tool(
-                        "search_sharepoint", {"query": "VPN", "top": 1}
-                    )
-                    assert called.isError is False
-                    assert "Mock VPN Guide.docx" in str(called)
+                        called = await session.call_tool(
+                            "search_sharepoint", {"query": "VPN", "top": 1}
+                        )
+                        assert called.isError is False
+                        assert "Mock VPN Guide.docx" in str(called)
+                        assert MockGraphClient.seen_tokens == ["alice-token-b"]
         finally:
             server.should_exit = True
             async with asyncio.timeout(5):

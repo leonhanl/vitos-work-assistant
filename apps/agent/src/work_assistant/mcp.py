@@ -1,33 +1,67 @@
-"""Persistent Streamable HTTP connection to the Microsoft 365 MCP service."""
+"""Request-authenticated tools for the Microsoft 365 MCP service."""
 
 from __future__ import annotations
 
 import logging
-from contextlib import AsyncExitStack
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_mcp_adapters.interceptors import (
+    MCPToolCallRequest,
+    MCPToolCallResult,
+)
 
 from work_assistant.config import Settings
+from work_assistant.obo import RequestAuthContext
 
 logger = logging.getLogger(__name__)
 
 SERVER_NAME = "m365-mcp-http"
 EXPECTED_TOOLS = {"search_sharepoint", "read_document"}
+_request_auth: ContextVar[RequestAuthContext | None] = ContextVar(
+    "m365_request_auth",
+    default=None,
+)
 
 
 class MCPConnectionError(RuntimeError):
     """Raised when the narrow Microsoft 365 MCP contract is unavailable."""
 
 
+@contextmanager
+def bind_request_auth(auth_context: RequestAuthContext) -> Iterator[None]:
+    """Make one request's credentials visible only to its MCP tool calls."""
+    marker = _request_auth.set(auth_context)
+    try:
+        yield
+    finally:
+        _request_auth.reset(marker)
+
+
+async def _inject_graph_token(
+    request: MCPToolCallRequest,
+    handler: Callable[[MCPToolCallRequest], Awaitable[MCPToolCallResult]],
+) -> MCPToolCallResult:
+    """Lazily obtain Token B and add it to a single MCP tool session."""
+    auth_context = _request_auth.get()
+    if auth_context is None:
+        raise RuntimeError("Microsoft 365 tool called outside an authenticated request")
+
+    token_b = await auth_context.get_graph_token()
+    headers = dict(request.headers or {})
+    headers["Authorization"] = f"Bearer {token_b}"
+    return await handler(request.override(headers=headers))
+
+
 class M365MCPClient:
-    """Own one Streamable HTTP MCP session for the API lifespan."""
+    """Load MCP schemas once and open a stateless session for each tool call."""
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._stack = AsyncExitStack()
         self._connected = False
 
     async def connect(self) -> list[BaseTool]:
@@ -43,9 +77,12 @@ class M365MCPClient:
         }
 
         try:
-            client = MultiServerMCPClient({SERVER_NAME: connection})
-            session = await self._stack.enter_async_context(client.session(SERVER_NAME))
-            tools = await load_mcp_tools(session, handle_tool_errors=False)
+            client = MultiServerMCPClient(
+                {SERVER_NAME: connection},
+                tool_interceptors=[_inject_graph_token],
+                handle_tool_errors=False,
+            )
+            tools = await client.get_tools(server_name=SERVER_NAME)
             names = {tool.name for tool in tools}
             missing = EXPECTED_TOOLS - names
             if missing:
@@ -54,7 +91,7 @@ class M365MCPClient:
                     f"m365-mcp-http is missing required tool(s): {missing_names}"
                 )
             self._connected = True
-            logger.info("Connected to m365-mcp-http over Streamable HTTP")
+            logger.info("Loaded tools from m365-mcp-http over Streamable HTTP")
             return [tool for tool in tools if tool.name in EXPECTED_TOOLS]
         except MCPConnectionError:
             await self.close()
@@ -66,6 +103,4 @@ class M365MCPClient:
             ) from exc
 
     async def close(self) -> None:
-        await self._stack.aclose()
-        self._stack = AsyncExitStack()
         self._connected = False

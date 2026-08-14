@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     entra_work_assistant_api_client_id: UUID = Field(
         validation_alias="ENTRA_WORK_ASSISTANT_API_CLIENT_ID"
     )
+    entra_work_assistant_api_client_secret: SecretStr = Field(
+        validation_alias="ENTRA_WORK_ASSISTANT_API_CLIENT_SECRET"
+    )
     entra_required_scope: str = Field(
         default="access_as_user",
         validation_alias="ENTRA_REQUIRED_SCOPE",
@@ -49,9 +52,9 @@ class Settings(BaseSettings):
             raise ValueError("must contain exactly one scope value")
         return value
 
-    @field_validator("llm_api_key")
+    @field_validator("llm_api_key", "entra_work_assistant_api_client_secret")
     @classmethod
-    def api_key_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
+    def secret_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value().strip():
             raise ValueError("must not be blank")
         return value

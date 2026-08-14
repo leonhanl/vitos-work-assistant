@@ -2,7 +2,7 @@
 
 Vito's Work Assistant 是一个学习型企业 AI Assistant Demo。它现在包含一个极简
 Vanilla JavaScript Web UI、Microsoft Entra 单租户登录、受 Token A 保护的 FastAPI，
-以及既有的 DeepAgent → Streamable HTTP MCP → Microsoft Graph 链路。
+以及使用 OBO 当前用户身份访问 Microsoft Graph 的 DeepAgent → Streamable HTTP MCP 链路。
 
 本 README 是仓库唯一的项目文档入口，统一描述 Web、Agent 和 M365 MCP 的配置、运行方式
 与安全边界。
@@ -27,16 +27,17 @@ Web UI
 Work Assistant FastAPI
    │ validate signature / issuer / tenant / audience / exp / nbf / scope
    │ CurrentUser = tid + oid；username 仅用于显示和日志
+   │ 首次 M365 工具调用时，以 Token A 执行 OBO
    ▼
 DeepAgent
    │
-   │ Streamable HTTP（不传 Token A）
+   │ Streamable HTTP；request-scoped Token B 仅放在 Authorization header
    ▼
 m365-mcp-http
    │
-   │ existing Device Code identity
+   │ Token B 不进入工具参数；直接作为 Graph delegated token
    ▼
-Microsoft Graph
+Microsoft Graph as current Alice / Bob
 ```
 
 身份边界必须明确：
@@ -44,12 +45,12 @@ Microsoft Graph
 ```text
 Frontend identity = 当前 Alice / Bob
 API identity      = 当前 Alice / Bob
-Graph identity    = m365-mcp-http token cache 中的共享 Device Code 用户
+Graph identity    = 当前 Alice / Bob（OBO Token B）
 ```
 
-因此 Alice 和 Bob 的 Token A 能让 API 区分两人，但 SharePoint 搜索结果与权限仍基于
-同一个 MCP Device Code 用户，并不基于 Alice/Bob 自己的 Graph ACL。本阶段没有 OBO、
-Graph Token B、Graph `/me`、MCP OAuth 或 per-user Graph identity。
+因此 SharePoint 搜索结果与文档读取会按 Alice/Bob 自己的 Graph ACL 执行 security
+trimming。普通问题如果没有调用 M365 工具，不会执行 OBO。Token A、Token B 都不会进入
+prompt、Agent state、checkpoint、工具参数或日志。
 
 这里的 **admin consent** 与登录是两件事：管理员代表 tenant 预先批准 delegated
 permission，因此普通用户登录时不应看到 **Permissions requested** 页面；用户仍需完成
@@ -63,7 +64,7 @@ vitos-work-assistant/
 │   ├── web/                  # Vite + Vanilla JS + MSAL Browser
 │   └── agent/                # FastAPI + Token A validation + DeepAgent
 ├── services/
-│   ├── m365-mcp-http/        # Streamable HTTP MCP + Device Code Flow
+│   ├── m365-mcp-http/        # Streamable HTTP MCP + request-scoped Graph token
 │   └── salesforce-mcp/       # 占位；本阶段未实现
 ├── libs/                     # 占位
 └── infra/                    # 占位
@@ -99,15 +100,14 @@ response：
 ## 1. 手工配置 Microsoft Entra
 
 代码不会用 Azure CLI、PowerShell、Terraform 或 Graph API 创建 registration。当前阶段
-需要在同一个 Vito tenant 中手工创建三个应用：
+需要在同一个 Vito tenant 中手工创建两个应用：
 
 | App Registration | OAuth 角色 | 当前权限 |
 |---|---|---|
 | `vitos-work-assistant-client` | Browser SPA public client | Work Assistant API `access_as_user` delegated permission |
-| `vitos-work-assistant-api` | Protected Web API | 暴露 `access_as_user`；当前没有 Graph permission 或 credential |
-| `vitos-m365-mcp` | Device Code public client | Microsoft Graph `User.Read`、`Files.Read.All` delegated permissions |
+| `vitos-work-assistant-api` | Protected Web API / confidential client | 暴露 `access_as_user`；Microsoft Graph `Files.Read.All` delegated permission |
 
-前两个应用组成 SPA → API 的 Token A 链路；第三个应用只服务于当前共享身份的 M365 MCP。
+两个应用组成 SPA → API 的 Token A 链路，API 再通过 OBO 获取 Graph Token B。
 所有需要批准的 delegated permissions 都由管理员预先授予 tenant-wide admin consent，
 不依赖 Alice/Bob 首次登录时执行 user consent。
 
@@ -143,12 +143,14 @@ New registration**：
 6. 进入 **Manifest**，在已有 `api` 对象内将 `requestedAccessTokenVersion` 设为数字
    `2`；不要覆盖 portal 刚创建的 `oauth2PermissionScopes`。
 
-7. 进入 **API permissions**。如果新 registration 自动带有 Microsoft Graph
-   `User.Read`，将它删除；完成后这里应没有任何 Microsoft Graph permission。
+7. 进入 **API permissions → Add a permission → Microsoft Graph → Delegated
+   permissions**，添加 `Files.Read.All`，并由管理员授予 tenant-wide admin consent。
+8. 进入 **Certificates & secrets → Client secrets**，为本地 MVP 创建 secret，并将它只配置
+   到 Agent 后端。不要把 secret 提交到仓库或发送到浏览器。生产环境应改用 certificate。
 
-API registration 本阶段不需要 redirect URI、client secret、certificate 或 Microsoft
-Graph permission。`Admins only` 不会删除 `access_as_user` scope 或后端的 scope 校验；它只
-是不允许普通用户自行批准权限，权限必须由企业管理员在应用交付前统一批准。
+API registration 不需要 redirect URI。`Admins only` 不会删除 `access_as_user` scope 或
+后端的 scope 校验；它只是不允许普通用户自行批准权限，权限必须由企业管理员在应用交付
+前统一批准。
 
 ### 1.2 `vitos-work-assistant-client`
 
@@ -179,15 +181,15 @@ Graph permission。`Admins only` 不会删除 `access_as_user` scope 或后端�
    这会把 SPA 写入 API 的 `preAuthorizedApplications`，明确预授权这个受信任的企业客户端。
 
 若 API 未出现在 **My APIs**，确认两个 registration 位于同一 tenant，并让当前配置人员
-成为两个 registration 的 Owner。不要把 SPA Client ID 加入 API manifest 的
-`knownClientApplications`；该字段用于 bundled consent，当前 API 不代表 Alice/Bob 调用
-下游 Graph，不需要捆绑两个应用的权限。API manifest 中的 `knownClientApplications` 应
-保持空数组。
+成为两个 registration 的 Owner。API manifest 中的 `knownClientApplications` 保持空
+数组；本项目由管理员分别为 SPA → API 的 `access_as_user` 和 API → Graph 的
+`Files.Read.All` 预先授予权限。
 
 以上是本项目的默认企业部署策略：管理员预先审核 scope、授予 tenant-wide admin
 consent，并由 API owner 预授权 SPA。普通用户只进行 Entra SSO，不应看到
-**Permissions requested** 页面。管理员 consent 只批准客户端代表用户调用 API；后端仍会
-验证 Token A 的 tenant、audience、签名、有效期与 `scp=access_as_user`。
+**Permissions requested** 页面。SPA → API 的 `access_as_user` consent 与 API → Graph
+的 `Files.Read.All` consent 是两个独立授权；后端仍会验证 Token A 的 tenant、audience、
+签名、有效期与 `scp=access_as_user`。
 
 如果只允许部分员工使用，再进入 **Enterprise applications** 中对应的 client enterprise
 application，将 **Assignment required?** 设为 **Yes**，并分配允许使用的用户或安全组；
@@ -197,24 +199,11 @@ SPA 是 public client，不能安全保存 credential。不要创建或放入前
 certificate、Graph token、refresh token、backend secret 或 OBO secret。Tenant ID 与
 client ID 属于公开客户端配置，不是 confidential secret。
 
-### 1.3 `vitos-m365-mcp`
+### 1.3 旧 `vitos-m365-mcp`
 
-这是当前阶段专供 `m365-mcp-http` 使用的 public client registration。它与 Browser SPA
-和 Work Assistant API 是不同的 OAuth client：
-
-1. 创建单租户 App Registration，Name 填 `vitos-m365-mcp`，Redirect URI 留空。
-2. 进入 **API permissions → Microsoft Graph → Delegated permissions**，添加
-   `User.Read` 和 `Files.Read.All`。
-3. 由管理员点击 **Grant admin consent for `<tenant>`**，确认两项 Graph delegated
-   permissions 已为 tenant 授予；不要等待 Device Code 登录用户自行 consent。
-4. 进入 **Authentication → Advanced settings**，启用 **Allow public client flows**。
-5. 记录它自己的 Directory (tenant) ID 与 Application (client) ID，分别配置为
-   `M365_TENANT_ID` 和 `M365_CLIENT_ID`。不要与 SPA/API Client ID 混用。
-6. 不要创建 client secret 或 certificate；Device Code client 是 public client。
-
-Graph 仍会根据这个 Device Code 登录用户自身的 SharePoint/OneDrive ACL 做 security
-trimming。Admin consent 只批准应用请求这些 delegated permissions，不会提升用户自身
-的数据权限。
+OBO 实现不再使用独立的 `vitos-m365-mcp` public client、Device Code Flow 或本地 MSAL
+token cache。确认 OBO 手工验证通过后，可以删除旧 registration；在此之前它即使保留也
+不会被代码使用。
 
 ## 2. 安装 Python 服务
 
@@ -231,11 +220,9 @@ python -m pip install -e "./apps/agent[dev]"
 
 ```bash
 cp services/m365-mcp-http/.env.example services/m365-mcp-http/.env
-# 编辑 .env，填写 vitos-m365-mcp 自己的 tenant/client ID
 set -a
 source services/m365-mcp-http/.env
 set +a
-python -m m365_mcp.auth login
 python -m m365_mcp.server
 ```
 
@@ -243,25 +230,22 @@ python -m m365_mcp.server
 `http://127.0.0.1:8001/mcp`。可配置项为：
 
 ```dotenv
-M365_TENANT_ID=<Directory tenant ID>
-M365_CLIENT_ID=<vitos-m365-mcp Application client ID>
-# M365_TOKEN_CACHE_PATH=~/.cache/m365-mcp/msal_token_cache.json
 MCP_HOST=127.0.0.1
 MCP_PORT=8001
 MCP_PATH=/mcp
 ```
 
-`python -m m365_mcp.auth login` 通过 Device Code Flow 创建本地 MSAL cache；工具调用期间
-只使用 `acquire_token_silent()`。Cache 包含敏感登录状态，不得提交、打印或发送给 LLM。
-重新登录会替换旧 cache，并确定后续所有 MCP 请求共同使用的 Graph identity。
+MCP 不保存登录状态。每次实际工具调用都要求 Agent 在 HTTP `Authorization` header 中
+传入当前 `/chat` 请求通过 OBO 获取的 Graph Token B。
 
 MCP 提供两个只读工具：
 
 - `search_sharepoint(query, top=5)`：搜索 Graph `driveItem`。
 - `read_document(drive_id, item_id)`：读取 `.docx`、UTF-8 `.txt` 或 `.md`；当前不支持 PDF。
 
-当前 MCP HTTP endpoint 没有 authentication，默认只允许监听 `127.0.0.1`。不要将它直接
-暴露给不受信任网络；生产暴露需要另行设计 TLS、service authentication 和网络边界。
+当前 MCP HTTP endpoint 没有独立的 service authentication，默认只允许监听
+`127.0.0.1`。不要将它直接暴露给不受信任网络；生产暴露需要另行设计 TLS、service
+authentication 和网络边界。
 
 ### 启动 Work Assistant API
 
@@ -285,13 +269,15 @@ LLM_API_KEY=<secret>
 LLM_MODEL=<tool-calling model>
 ENTRA_TENANT_ID=<Directory tenant ID>
 ENTRA_WORK_ASSISTANT_API_CLIENT_ID=<vitos-work-assistant-api Application client ID>
+ENTRA_WORK_ASSISTANT_API_CLIENT_SECRET=<backend-only secret>
 ENTRA_REQUIRED_SCOPE=access_as_user
 M365_MCP_URL=http://127.0.0.1:8001/mcp
 ```
 
 `GET http://127.0.0.1:8000/health` 应匿名返回 `{"status":"ok"}`；没有 Bearer 的
-`POST /chat` 和 `GET /me` 应返回 `401`。Agent 启动时会建立一个共享 MCP connection；
-MCP 连接或必要配置失败时，应用启动直接失败。
+`POST /chat` 和 `GET /me` 应返回 `401`。Agent 启动时只读取 MCP 工具定义；每次实际工具
+调用建立 stateless session，并携带当前请求的 Token B。MCP 连接或必要配置失败时，应用
+启动直接失败。
 
 ## 3. 启动 Web UI
 
@@ -351,8 +337,8 @@ Vite proxy 会显式删除 `/api`，所以本地开发不需要 FastAPI CORS。`
 如果仍然出现 **Permissions requested (1 of 2 apps)** / **(2 of 2 apps)**，依次检查：
 
 1. client 的 `access_as_user` 是否已经显示 admin consent granted；
-2. client 和 API registration 的 **API permissions** 中是否残留 Microsoft Graph
-   `User.Read`；当前项目两边都不需要它；
+2. client registration 是否误加 Microsoft Graph 权限；Graph `Files.Read.All` 应只添加
+   在 API registration；
 3. API 的 **Authorized client applications** 是否包含正确的 SPA Client ID 和
    `access_as_user` permission；
 4. API manifest 的 `knownClientApplications` 是否误填了 SPA Client ID；本项目应为空。
@@ -378,8 +364,9 @@ Python 中 list 和 tuple 有什么区别？
 出差的时候怎么访问公司的内部系统？
 ```
 
-调用链仍是 Alice Token A → FastAPI identifies Alice → DeepAgent → m365-mcp-http →
-Graph as existing Device Code user。此时 SharePoint ACL 不是 Alice 自己的 ACL。
+调用链是 Alice Token A → FastAPI identifies Alice → DeepAgent 首次调用 M365 工具时执行
+OBO → m365-mcp-http 收到 Alice Token B → Graph as Alice。SharePoint ACL 应是 Alice 自己
+的 ACL。前一个普通 Python 问题若没有调用 M365 工具，则不会执行 OBO。
 
 ### Bob 与 Sign out
 
@@ -407,33 +394,13 @@ python -m pytest services/m365-mcp-http/tests
 
 ## 已知限制与下一阶段
 
-当前 `thread_id` 只保存在 Agent 进程内存中，刷新页面可以丢失。它尚未绑定
-authenticated `(tid, oid)`；持久化多用户版本必须实现 conversation ownership。
+当前 `thread_id` 只保存在 Agent 进程内存中，刷新页面可以丢失。内部 checkpoint key 已
+绑定 `(tid, oid, thread_id)`，但持久化版本仍需实现 conversation repository 和生命周期。
 
-下一阶段 TODO（本阶段未实现）：
-
-```text
-Browser
-   ↓ Token A
-Work Assistant API
-   │ validate Token A；不得把 token 放入 prompt / Agent state / 日志
-   ↓ OBO（confidential client）
-Graph Token B for current Alice / Bob
-   ↓ request-scoped secure propagation
-m365-mcp-http
-   ↓
-Microsoft Graph as Alice / Bob
-```
-
-实现 OBO 时，`vitos-work-assistant-api` 需要成为 confidential client，使用保存在后端的
-certificate 或 client secret，并添加实际需要的 Microsoft Graph **delegated** permissions。
-这些新增 Graph permissions 也必须由管理员预先授予 tenant-wide admin consent；当前为
-SPA → Work Assistant API 授予的 `access_as_user` admin consent 不会自动覆盖 API → Graph。
-完成管理员授权后，Alice/Bob 仍只需登录，不应分别执行 user consent。
-
-代码层面还需要安全保留 Token A 作为 OBO assertion、按请求取得/传递 Token B，并让 MCP
-调用绑定当前用户，不能继续复用当前全局 Device Code identity 或连接级共享 token。OBO
-完成后可移除 `vitos-m365-mcp` 的 Device Code 登录链路；在此之前两种身份模型不得混用。
+本 MVP 使用 client secret，生产部署应改用 certificate 或托管的 secret store。当前没有
+实现完整的 Conditional Access / CAE claims-challenge 往返；需要额外交互的 OBO 请求会
+返回安全错误，而不会自动让 SPA 携带 claims 重新登录。MCP 仍只适合监听 localhost；跨
+主机部署需要独立的 TLS、service authentication 和网络边界。
 
 ## 官方资料
 

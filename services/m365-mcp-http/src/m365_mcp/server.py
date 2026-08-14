@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from starlette.types import ASGIApp
 
-from m365_mcp.auth import get_access_token
+from m365_mcp.auth import GraphTokenMiddleware, get_access_token
 from m365_mcp.document_parser import (
     DocumentParseError,
     extract_text,
@@ -137,6 +138,11 @@ def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def create_http_app() -> ASGIApp:
+    """Create the MCP HTTP app with request-scoped Graph token propagation."""
+    return GraphTokenMiddleware(mcp.streamable_http_app())
+
+
 def main() -> None:
     logger.info(
         "MCP server starting transport=streamable-http host=%s port=%d path=%s "
@@ -151,7 +157,14 @@ def main() -> None:
             "authentication; use only in a trusted development environment"
         )
     try:
-        mcp.run(transport="streamable-http")
+        import uvicorn
+
+        uvicorn.run(
+            create_http_app(),
+            host=server_config.host,
+            port=server_config.port,
+            log_level="info",
+        )
     except KeyboardInterrupt:
         logger.info("MCP server shutdown requested")
     finally:

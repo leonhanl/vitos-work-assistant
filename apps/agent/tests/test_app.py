@@ -4,13 +4,22 @@ from fastapi.testclient import TestClient
 import work_assistant.app as app_module
 from work_assistant.agent import AgentServiceError
 from work_assistant.app import ChatService, create_app
-from work_assistant.auth import CurrentUser, get_current_user
+from work_assistant.auth import (
+    AuthenticatedRequest,
+    CurrentUser,
+    get_authenticated_request,
+)
 from work_assistant.mcp import MCPConnectionError
 from work_assistant.models import ChatResponse, Source
 
 
 class FakeAgent:
-    async def chat(self, thread_id: str, message: str) -> ChatResponse:
+    async def chat(
+        self,
+        thread_id: str,
+        message: str,
+        authenticated: AuthenticatedRequest,
+    ) -> ChatResponse:
         return ChatResponse(
             thread_id=thread_id,
             answer=f"answer: {message}",
@@ -18,17 +27,22 @@ class FakeAgent:
         )
 
 
-async def fake_current_user() -> CurrentUser:
-    return CurrentUser(
-        oid="alice-oid",
-        tid="tenant-id",
-        username="alice@example.com",
+async def fake_authenticated_request() -> AuthenticatedRequest:
+    return AuthenticatedRequest(
+        user=CurrentUser(
+            oid="alice-oid",
+            tid="tenant-id",
+            username="alice@example.com",
+        ),
+        token_a="token-a",
     )
 
 
 def _create_test_app(chat_service: ChatService | None = None):
     application = create_app(chat_service or FakeAgent())
-    application.dependency_overrides[get_current_user] = fake_current_user
+    application.dependency_overrides[
+        get_authenticated_request
+    ] = fake_authenticated_request
     return application
 
 
@@ -79,7 +93,12 @@ def test_chat_request_validation() -> None:
 
 def test_agent_error_becomes_sanitized_api_error() -> None:
     class FailingAgent:
-        async def chat(self, thread_id: str, message: str) -> ChatResponse:
+        async def chat(
+            self,
+            thread_id: str,
+            message: str,
+            authenticated: AuthenticatedRequest,
+        ) -> ChatResponse:
             raise AgentServiceError(
                 503,
                 "m365_rate_limited",

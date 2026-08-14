@@ -1825,6 +1825,7 @@ dependencies = [
     { name = "httpx" },
     { name = "langchain-mcp-adapters" },
     { name = "langchain-openai" },
+    { name = "msal" },
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "uvicorn" },
@@ -1832,7 +1833,6 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "msal" },
     { name = "pytest" },
 ]
 
@@ -1843,7 +1843,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "langchain-mcp-adapters", specifier = ">=0.3,<0.4" },
     { name = "langchain-openai", specifier = ">=1.4,<2" },
-    { name = "msal", marker = "extra == 'dev'", specifier = ">=1.34,<2" },
+    { name = "msal", specifier = ">=1.34,<2" },
     { name = "pydantic-settings", specifier = ">=2.10,<3" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<10" },

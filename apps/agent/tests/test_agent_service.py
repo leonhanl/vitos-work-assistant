@@ -11,6 +11,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 import work_assistant.agent as agent_module
 from work_assistant.agent import AgentService
+from work_assistant.auth import AuthenticatedRequest, CurrentUser
 
 
 def test_agent_service_builds_and_invokes_the_expected_deep_agent(
@@ -57,8 +58,18 @@ def test_agent_service_builds_and_invokes_the_expected_deep_agent(
         lambda unused_settings: chat_model_client,
     )
 
-    service = AgentService(settings, tools=[])
-    response = asyncio.run(service.chat("thread-1", "current question"))
+    class UnusedTokenAcquirer:
+        async def acquire_graph_token(self, token_a: str) -> str:
+            raise AssertionError("OBO must not run when no MCP tool is invoked")
+
+    service = AgentService(settings, tools=[], token_acquirer=UnusedTokenAcquirer())
+    authenticated = AuthenticatedRequest(
+        user=CurrentUser(oid="alice-oid", tid="tenant-id"),
+        token_a="token-a",
+    )
+    response = asyncio.run(
+        service.chat("thread-1", "current question", authenticated)
+    )
 
     options = captured["agent_options"]
     assert options["model"] is chat_model_client
@@ -68,7 +79,9 @@ def test_agent_service_builds_and_invokes_the_expected_deep_agent(
     assert options["skills"] == ["/skills/"]
     assert options["subagents"] == []
 
-    assert captured["config"] == {"configurable": {"thread_id": "thread-1"}}
+    assert captured["config"] == {
+        "configurable": {"thread_id": "tenant-id:alice-oid:thread-1"}
+    }
     assert captured["state"]["messages"] == [
         {"role": "user", "content": "current question"}
     ]

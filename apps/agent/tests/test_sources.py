@@ -3,6 +3,7 @@ import json
 from langchain_core.messages import ToolMessage
 
 from work_assistant.agent import classify_agent_error, normalize_sources
+from work_assistant.obo import OboTokenError
 
 
 def test_sources_deduplicate() -> None:
@@ -81,11 +82,21 @@ def test_sources_support_mcp_structured_content_artifact() -> None:
     ]
 
 
-def test_login_errors_are_mapped_to_a_login_hint() -> None:
-    mapped = classify_agent_error(RuntimeError("No valid login session found."))
+def test_missing_graph_token_errors_are_mapped_to_authentication_failure() -> None:
+    mapped = classify_agent_error(RuntimeError("missing a Graph access token"))
 
     assert mapped.status_code == 503
-    assert mapped.code == "m365_login_required"
+    assert mapped.code == "m365_authentication_unavailable"
+
+
+def test_obo_consent_errors_are_mapped_without_exposing_provider_details() -> None:
+    wrapped = RuntimeError("tool failed")
+    wrapped.__cause__ = OboTokenError("obo_authorization_required")
+
+    mapped = classify_agent_error(wrapped)
+
+    assert mapped.status_code == 403
+    assert mapped.code == "m365_authorization_required"
 
 
 def test_other_errors_map_to_generic_without_exposing_raw_details() -> None:

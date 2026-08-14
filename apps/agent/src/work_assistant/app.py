@@ -10,10 +10,16 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from work_assistant.agent import AgentService, AgentServiceError
-from work_assistant.auth import CurrentUser, get_current_user
+from work_assistant.auth import (
+    AuthenticatedRequest,
+    CurrentUser,
+    get_authenticated_request,
+    get_current_user,
+)
 from work_assistant.config import Settings
 from work_assistant.mcp import M365MCPClient
 from work_assistant.models import ChatRequest, ChatResponse
+from work_assistant.obo import OboTokenService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,7 +31,12 @@ logger = logging.getLogger(__name__)
 class ChatService(Protocol):
     """The one method FastAPI needs from the Agent service."""
 
-    async def chat(self, thread_id: str, message: str) -> ChatResponse: ...
+    async def chat(
+        self,
+        thread_id: str,
+        message: str,
+        authenticated: AuthenticatedRequest,
+    ) -> ChatResponse: ...
 
 
 def create_app(chat_service: ChatService | None = None) -> FastAPI:
@@ -43,7 +54,11 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
         mcp_client = M365MCPClient(settings)
         try:
             tools = await mcp_client.connect()
-            application.state.chat_service = AgentService(settings, tools)
+            application.state.chat_service = AgentService(
+                settings,
+                tools,
+                OboTokenService(settings),
+            )
             yield
         finally:
             application.state.chat_service = None
@@ -69,13 +84,13 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
     async def chat(
         payload: ChatRequest,
         request: Request,
-        _current_user: CurrentUser = Depends(get_current_user),
+        authenticated: AuthenticatedRequest = Depends(get_authenticated_request),
     ) -> ChatResponse:
         thread_id = payload.thread_id or str(uuid4())
         logger.info("Chat request started", extra={"thread_id": thread_id})
         service: ChatService = request.app.state.chat_service
         try:
-            response = await service.chat(thread_id, payload.message)
+            response = await service.chat(thread_id, payload.message, authenticated)
             logger.info("Chat request succeeded", extra={"thread_id": thread_id})
             return response
         except AgentServiceError as exc:

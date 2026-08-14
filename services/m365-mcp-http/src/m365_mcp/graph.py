@@ -175,10 +175,7 @@ class GraphClient:
     def _map_error(response: httpx.Response) -> GraphAPIError:
         status = response.status_code
         if status == 401:
-            message = (
-                "Microsoft Graph rejected the login session (401). Run:\n\n"
-                "python -m m365_mcp.auth login"
-            )
+            message = "Microsoft Graph rejected the delegated access token (401)."
         elif status == 403:
             message = (
                 "Microsoft Graph denied access (403). Check delegated Files.Read.All "

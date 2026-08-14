@@ -19,9 +19,12 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from work_assistant.auth import AuthenticatedRequest
 from work_assistant.config import Settings
 from work_assistant.llm import create_chat_model_client
+from work_assistant.mcp import bind_request_auth
 from work_assistant.models import ChatResponse, Source
+from work_assistant.obo import GraphTokenAcquirer, OboTokenError, RequestAuthContext
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +58,13 @@ class AgentServiceError(RuntimeError):
 class AgentService:
     """One process-local DeepAgent with in-memory threaded conversations."""
 
-    def __init__(self, settings: Settings, tools: Sequence[BaseTool]) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        tools: Sequence[BaseTool],
+        token_acquirer: GraphTokenAcquirer,
+    ) -> None:
+        self._token_acquirer = token_acquirer
         skill_text = settings.skill_file.read_text(encoding="utf-8")
         self._skill_files = {
             "/skills/enterprise-knowledge-search/SKILL.md": create_file_data(
@@ -72,16 +81,30 @@ class AgentService:
             checkpointer=InMemorySaver(),
         )
 
-    async def chat(self, thread_id: str, message: str) -> ChatResponse:
+    async def chat(
+        self,
+        thread_id: str,
+        message: str,
+        authenticated: AuthenticatedRequest,
+    ) -> ChatResponse:
         logger.info("Agent execution started", extra={"thread_id": thread_id})
+        auth_context = RequestAuthContext(
+            user=authenticated.user,
+            token_a=authenticated.token_a,
+            token_acquirer=self._token_acquirer,
+        )
+        internal_thread_id = (
+            f"{authenticated.user.tid}:{authenticated.user.oid}:{thread_id}"
+        )
         try:
-            result = await self._agent_graph.ainvoke(
-                {
-                    "messages": [{"role": "user", "content": message}],
-                    "files": self._skill_files,
-                },
-                config={"configurable": {"thread_id": thread_id}},
-            )
+            with bind_request_auth(auth_context):
+                result = await self._agent_graph.ainvoke(
+                    {
+                        "messages": [{"role": "user", "content": message}],
+                        "files": self._skill_files,
+                    },
+                    config={"configurable": {"thread_id": internal_thread_id}},
+                )
             messages = result.get("messages")
             if not isinstance(messages, list):
                 raise RuntimeError("DeepAgent returned no messages")
@@ -218,15 +241,44 @@ def _iter_mappings(value: Any) -> Iterable[Mapping[str, Any]]:
 
 def classify_agent_error(exc: Exception) -> AgentServiceError:
     """Collapse dependency failures into stable errors without leaking raw details."""
-    detail = str(exc).lower()
-    if "login session" in detail or "m365_mcp.auth login" in detail:
+    obo_error = _find_cause(exc, OboTokenError)
+    if isinstance(obo_error, OboTokenError):
+        if obo_error.code == "obo_authorization_required":
+            return AgentServiceError(
+                403,
+                "m365_authorization_required",
+                "Microsoft 365 access requires administrator consent or user interaction.",
+            )
         return AgentServiceError(
             503,
-            "m365_login_required",
-            "Microsoft 365 is not logged in. Run the m365-mcp login command.",
+            "m365_authentication_unavailable",
+            "Microsoft 365 authentication is temporarily unavailable.",
+        )
+
+    detail = str(exc).lower()
+    if "graph access token" in detail:
+        return AgentServiceError(
+            503,
+            "m365_authentication_unavailable",
+            "Microsoft 365 authentication is temporarily unavailable.",
         )
     return AgentServiceError(
         502,
         "agent_execution_failed",
         "The assistant could not complete this request.",
     )
+
+
+def _find_cause(
+    exc: BaseException,
+    error_type: type[BaseException],
+) -> BaseException | None:
+    """Find a typed cause without exposing dependency exception text."""
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if isinstance(current, error_type):
+            return current
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return None

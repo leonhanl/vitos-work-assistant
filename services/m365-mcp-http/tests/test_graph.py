@@ -70,7 +70,7 @@ def test_normalize_search_hit_without_drive_id() -> None:
 @pytest.mark.parametrize(
     ("status", "expected"),
     [
-        (401, "login session"),
+        (401, "delegated access token"),
         (403, "denied access"),
         (404, "not found"),
         (429, "throttling"),
