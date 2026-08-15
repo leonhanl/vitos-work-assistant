@@ -1,29 +1,28 @@
-"""OpenAI-compatible LangChain chat model construction."""
+"""OpenAI-compatible PydanticAI model construction."""
 
-from typing import Any
-
-from langchain_openai import ChatOpenAI
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from work_assistant.config import Settings
 
 
-def create_chat_model_client(settings: Settings) -> ChatOpenAI:
-    """Create the LangChain client used to call the configured chat model."""
-    compatibility_options: dict[str, Any] = {}
+def create_chat_model_client(settings: Settings) -> OpenAIChatModel:
+    """Create the PydanticAI model used by the shared Agent."""
+    model_settings = OpenAIChatModelSettings(timeout=60.0)
     if _is_gpt_5_6(settings.llm_model):
         # GPT-5.6 defaults to reasoning effort "medium", while its Chat
         # Completions endpoint only accepts function tools at effort "none".
         # Responses API is intentionally out of scope for this minimal demo.
-        compatibility_options["reasoning_effort"] = "none"
+        model_settings["openai_reasoning_effort"] = "none"
 
-    return ChatOpenAI(
-        model=settings.llm_model,
+    provider = OpenAIProvider(
         api_key=settings.llm_api_key.get_secret_value(),
         base_url=str(settings.llm_base_url),
-        use_responses_api=False,
-        max_retries=1,
-        timeout=60.0,
-        **compatibility_options,
+    )
+    return OpenAIChatModel(
+        settings.llm_model,
+        provider=provider,
+        settings=model_settings,
     )
 
 

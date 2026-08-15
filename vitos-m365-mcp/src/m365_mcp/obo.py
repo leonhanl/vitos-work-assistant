@@ -1,58 +1,58 @@
-"""Microsoft Entra on-behalf-of acquisition for the MCP audience token."""
+"""Microsoft Entra on-behalf-of exchange from Token M to a Graph token."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Protocol
 
-import anyio
 import msal
 
-from work_assistant.config import Settings
+from m365_mcp.config import Settings
 
 logger = logging.getLogger(__name__)
 
+GRAPH_SCOPE = "https://graph.microsoft.com/.default"
+
 
 class OboTokenError(RuntimeError):
-    """A sanitized OBO failure safe to classify at the API boundary."""
+    """A sanitized OBO failure that never contains provider token details."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
         self.code = code
 
 
-class MCPTokenAcquirer(Protocol):
-    async def acquire_mcp_token(self, token_a: str) -> str: ...
+class GraphTokenAcquirer(Protocol):
+    async def acquire_graph_token(self, token_m: str) -> str: ...
 
 
 class OboTokenService:
-    """Exchange a validated Work Assistant Token A for MCP Token M."""
+    """Exchange a validated MCP Token M for a delegated Graph Token G."""
 
     def __init__(self, settings: Settings) -> None:
-        self._client_id = str(settings.entra_work_assistant_api_client_id)
+        self._client_id = str(settings.entra_mcp_client_id)
         self._authority = (
             f"https://login.microsoftonline.com/{settings.entra_tenant_id}"
         )
-        self._client_secret = (
-            settings.entra_work_assistant_api_client_secret.get_secret_value()
-        )
-        self._scope = settings.mcp_scope
+        self._client_secret = settings.entra_mcp_client_secret.get_secret_value()
 
-    async def acquire_mcp_token(self, token_a: str) -> str:
-        if not token_a.strip():
+    async def acquire_graph_token(self, token_m: str) -> str:
+        if not token_m.strip():
             raise OboTokenError("invalid_user_assertion")
 
         try:
-            result = await anyio.to_thread.run_sync(
-                self._acquire_mcp_token_sync,
-                token_a,
+            result = await asyncio.to_thread(
+                self._acquire_graph_token_sync,
+                token_m,
             )
         except Exception:
-            logger.warning("MCP OBO token exchange failed")
+            logger.warning("Microsoft Graph OBO token exchange failed")
             raise OboTokenError("obo_service_unavailable") from None
 
         access_token = result.get("access_token") if isinstance(result, dict) else None
         if isinstance(access_token, str) and access_token.strip():
+            logger.info("Microsoft Graph OBO token exchange succeeded")
             return access_token
 
         error_code = result.get("error") if isinstance(result, dict) else None
@@ -60,17 +60,16 @@ class OboTokenService:
             safe_code = "obo_authorization_required"
         else:
             safe_code = "obo_token_exchange_failed"
-        logger.warning("MCP OBO token exchange failed code=%s", safe_code)
+        logger.warning("Microsoft Graph OBO token exchange failed code=%s", safe_code)
         raise OboTokenError(safe_code)
 
-    def _acquire_mcp_token_sync(self, token_a: str) -> dict[str, object]:
-        """Use the Agent API's confidential identity for the OBO exchange."""
+    def _acquire_graph_token_sync(self, token_m: str) -> dict[str, object]:
         application = msal.ConfidentialClientApplication(
             client_id=self._client_id,
             authority=self._authority,
             client_credential=self._client_secret,
         )
         return application.acquire_token_on_behalf_of(
-            user_assertion=token_a,
-            scopes=[self._scope],
+            user_assertion=token_m,
+            scopes=[GRAPH_SCOPE],
         )

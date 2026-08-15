@@ -1,4 +1,4 @@
-"""Small Microsoft Graph client for the two capabilities exposed by this server."""
+"""Small Microsoft Graph client for the capabilities exposed by this server."""
 
 from __future__ import annotations
 

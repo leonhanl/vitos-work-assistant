@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="${ROOT_DIR}/logs"
 VENV_DIR="${ROOT_DIR}/.venv"
 
-MCP_ENV="${ROOT_DIR}/services/m365-mcp-http/.env"
+MCP_ENV="${ROOT_DIR}/vitos-m365-mcp/.env"
 AGENT_ENV="${ROOT_DIR}/apps/agent/.env"
 WEB_ENV="${ROOT_DIR}/apps/web/.env"
 
@@ -79,7 +79,7 @@ start_mcp() {
   local pid=$!
   PIDS="${PIDS} ${pid}"
   printf '正在启动 m365-mcp（PID %s）...\n' "$pid"
-  wait_for_url "m365-mcp" "http://127.0.0.1:8001/mcp" "$pid" "$MCP_LOG"
+  wait_for_url "m365-mcp" "http://127.0.0.1:8001/health" "$pid" "$MCP_LOG"
   printf 'm365-mcp 已响应，额外等待 2 秒确保启动完成...\n'
   sleep 2
 }

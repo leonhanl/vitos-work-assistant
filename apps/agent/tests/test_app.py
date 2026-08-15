@@ -1,7 +1,5 @@
-import pytest
 from fastapi.testclient import TestClient
 
-import work_assistant.app as app_module
 from work_assistant.agent import AgentServiceError
 from work_assistant.app import ChatService, create_app
 from work_assistant.auth import (
@@ -9,7 +7,6 @@ from work_assistant.auth import (
     CurrentUser,
     get_authenticated_request,
 )
-from work_assistant.mcp import MCPConnectionError
 from work_assistant.models import ChatResponse, Source
 
 
@@ -110,30 +107,3 @@ def test_agent_error_becomes_sanitized_api_error() -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "m365_rate_limited"
-
-
-def test_mcp_startup_failure_stops_the_app_and_closes_the_client(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    clients = []
-
-    class BrokenMCPClient:
-        def __init__(self, settings: object) -> None:
-            self.closed = False
-            clients.append(self)
-
-        async def connect(self):
-            raise MCPConnectionError("MCP is unavailable")
-
-        async def close(self) -> None:
-            self.closed = True
-
-    monkeypatch.setattr(app_module, "Settings", lambda: object())
-    monkeypatch.setattr(app_module, "M365MCPClient", BrokenMCPClient)
-
-    with pytest.raises(MCPConnectionError, match="MCP is unavailable"):
-        with TestClient(create_app()):
-            pass
-
-    assert len(clients) == 1
-    assert clients[0].closed is True

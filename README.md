@@ -2,10 +2,10 @@
 
 Vito's Work Assistant 是一个学习型企业 AI Assistant Demo。它现在包含一个极简
 Vanilla JavaScript Web UI、Microsoft Entra 单租户登录、受 Token A 保护的 FastAPI，
-以及使用 OBO 当前用户身份访问 Microsoft Graph 的 DeepAgent → Streamable HTTP MCP 链路。
+以及使用两段 OBO 保持当前用户身份的 Pydantic AI → Streamable HTTP MCP 链路。
 
-本 README 是仓库唯一的项目文档入口，统一描述 Web、Agent 和 M365 MCP 的配置、运行方式
-与安全边界。
+本 README 描述 Work Assistant 的整体配置、运行方式与集成边界；待迁出的 M365 MCP
+同时维护自己的独立文档：[`vitos-m365-mcp/README.md`](vitos-m365-mcp/README.md)。
 
 ## 当前架构
 
@@ -27,17 +27,17 @@ Web UI
 Work Assistant FastAPI
    │ validate signature / issuer / tenant / audience / exp / nbf / scope
    │ CurrentUser = tid + oid；username 仅用于显示和日志
-   │ 首次 M365 工具调用时，以 Token A 执行 OBO
+   │ 每次 /chat：OBO Token A → Token M
    ▼
-DeepAgent
+Pydantic AI Agent
    │
-   │ Streamable HTTP；request-scoped Token B 仅放在 Authorization header
+   │ Streamable HTTP；Token M: aud = vitos-m365-mcp
    ▼
-m365-mcp-http
+vitos-m365-mcp
    │
-   │ Token B 不进入工具参数；直接作为 Graph delegated token
+   │ validate Token M；每次工具调用 OBO Token M → Token G
    ▼
-Microsoft Graph as current Alice / Bob
+Microsoft Graph as current Alice / Bob（Token G）
 ```
 
 身份边界必须明确：
@@ -45,12 +45,19 @@ Microsoft Graph as current Alice / Bob
 ```text
 Frontend identity = 当前 Alice / Bob
 API identity      = 当前 Alice / Bob
-Graph identity    = 当前 Alice / Bob（OBO Token B）
+MCP identity      = 当前 Alice / Bob（OBO Token M）
+Graph identity    = 当前 Alice / Bob（OBO Token G）
 ```
 
 因此 SharePoint 搜索结果与文档读取会按 Alice/Bob 自己的 Graph ACL 执行 security
-trimming。普通问题如果没有调用 M365 工具，不会执行 OBO。Token A、Token B 都不会进入
-prompt、Agent state、checkpoint、工具参数或日志。
+trimming。由于受保护的 MCP 在 `initialize` 和 `tools/list` 阶段就要求认证，每次 `/chat`
+都会先获取 Token M；只有模型实际调用 M365 工具时，MCP 才继续获取 Token G。Token A、
+Token M、Token G 都不会进入 prompt、对话历史、工具参数或日志。
+
+Agent 进程只创建一个共享的 Pydantic AI `Agent`；用户状态不放在 Agent 对象里，而是用
+`(tid, oid, thread_id)` 索引独立的内存消息历史。`apps/agent/skills/` 下每个子目录中的
+`SKILL.md` 会在启动时被发现，模型最初只看到 skill 的名称和描述；调用
+`load_capability` 后才加载完整正文。修改或新增 skill 后需要重启 Agent 进程。
 
 这里的 **admin consent** 与登录是两件事：管理员代表 tenant 预先批准 delegated
 permission，因此普通用户登录时不应看到 **Permissions requested** 页面；用户仍需完成
@@ -62,9 +69,9 @@ permission，因此普通用户登录时不应看到 **Permissions requested** �
 vitos-work-assistant/
 ├── apps/
 │   ├── web/                  # Vite + Vanilla JS + MSAL Browser
-│   └── agent/                # FastAPI + Token A validation + DeepAgent
+│   └── agent/                # FastAPI + Token A validation + Pydantic AI
+├── vitos-m365-mcp/           # 自包含、待迁出为独立 repo 的 MCP service
 └── services/
-    ├── m365-mcp-http/        # Streamable HTTP MCP + request-scoped Graph token
     └── salesforce-mcp-http/  # 占位；即将实现
 ```
 
@@ -98,14 +105,15 @@ response：
 ## 1. 手工配置 Microsoft Entra
 
 代码不会用 Azure CLI、PowerShell、Terraform 或 Graph API 创建 registration。当前阶段
-需要在同一个 Vito tenant 中手工创建两个应用：
+需要在同一个 Vito tenant 中手工创建三个应用：
 
 | App Registration | OAuth 角色 | 当前权限 |
 |---|---|---|
 | `vitos-work-assistant-client` | Browser SPA public client | Work Assistant API `access_as_user` delegated permission |
-| `vitos-work-assistant-api` | Protected Web API / confidential client | 暴露 `access_as_user`；Microsoft Graph `Files.Read.All` delegated permission |
+| `vitos-work-assistant-api` | Protected Web API / confidential client | 暴露自己的 `access_as_user`；调用 MCP 的 `access_as_user` delegated permission |
+| `vitos-m365-mcp` | Protected MCP resource / confidential client | 暴露自己的 `access_as_user`；Microsoft Graph `Files.Read.All` delegated permission |
 
-两个应用组成 SPA → API 的 Token A 链路，API 再通过 OBO 获取 Graph Token B。
+三个应用组成 Token A → Token M → Token G 的委托链路。
 所有需要批准的 delegated permissions 都由管理员预先授予 tenant-wide admin consent，
 不依赖 Alice/Bob 首次登录时执行 user consent。
 
@@ -141,8 +149,9 @@ New registration**：
 6. 进入 **Manifest**，在已有 `api` 对象内将 `requestedAccessTokenVersion` 设为数字
    `2`；不要覆盖 portal 刚创建的 `oauth2PermissionScopes`。
 
-7. 进入 **API permissions → Add a permission → Microsoft Graph → Delegated
-   permissions**，添加 `Files.Read.All`，并由管理员授予 tenant-wide admin consent。
+7. 进入 **API permissions → Add a permission → My APIs**，添加
+   `vitos-m365-mcp/access_as_user` delegated permission，并由管理员授予 tenant-wide
+   admin consent。
 8. 进入 **Certificates & secrets → Client secrets**，为本地 MVP 创建 secret，并将它只配置
    到 Agent 后端。不要把 secret 提交到仓库或发送到浏览器。生产环境应改用 certificate。
 
@@ -180,14 +189,13 @@ API registration 不需要 redirect URI。`Admins only` 不会删除 `access_as_
 
 若 API 未出现在 **My APIs**，确认两个 registration 位于同一 tenant，并让当前配置人员
 成为两个 registration 的 Owner。API manifest 中的 `knownClientApplications` 保持空
-数组；本项目由管理员分别为 SPA → API 的 `access_as_user` 和 API → Graph 的
-`Files.Read.All` 预先授予权限。
+数组；本项目由管理员分别为 SPA → API、API → MCP、MCP → Graph 三段委托权限预先
+授予 consent。
 
 以上是本项目的默认企业部署策略：管理员预先审核 scope、授予 tenant-wide admin
 consent，并由 API owner 预授权 SPA。普通用户只进行 Entra SSO，不应看到
-**Permissions requested** 页面。SPA → API 的 `access_as_user` consent 与 API → Graph
-的 `Files.Read.All` consent 是两个独立授权；后端仍会验证 Token A 的 tenant、audience、
-签名、有效期与 `scp=access_as_user`。
+**Permissions requested** 页面。三段 permission/consent 彼此独立；Agent 仍会验证 Token A，
+MCP 则单独验证 Token M。
 
 如果只允许部分员工使用，再进入 **Enterprise applications** 中对应的 client enterprise
 application，将 **Assignment required?** 设为 **Yes**，并分配允许使用的用户或安全组；
@@ -197,11 +205,25 @@ SPA 是 public client，不能安全保存 credential。不要创建或放入前
 certificate、Graph token、refresh token、backend secret 或 OBO secret。Tenant ID 与
 client ID 属于公开客户端配置，不是 confidential secret。
 
-### 1.3 旧 `vitos-m365-mcp`
+### 1.3 `vitos-m365-mcp`
 
-OBO 实现不再使用独立的 `vitos-m365-mcp` public client、Device Code Flow 或本地 MSAL
-token cache。确认 OBO 手工验证通过后，可以删除旧 registration；在此之前它即使保留也
-不会被代码使用。
+按 [`vitos-m365-mcp/README.md`](vitos-m365-mcp/README.md) 创建独立的单租户
+registration，并完成以下关键配置：
+
+1. 暴露 `api://<MCP_CLIENT_ID>/access_as_user` delegated scope。
+2. 添加 Microsoft Graph `Files.Read.All` delegated permission，并授予 admin consent。
+3. 创建仅供 MCP 服务端执行 Token M → Token G OBO 的 client secret。
+4. 在 **Authorized client applications** 中预授权 `vitos-work-assistant-api` 使用
+   `access_as_user`。
+
+Graph permission 和 MCP secret 都属于 MCP registration，不属于 SPA，也不要放回 Agent
+registration。
+
+### 1.4 旧 Device Code public client registration
+
+现有集成不再使用早期为 Device Code Flow 创建的 public client registration 或本地
+MSAL token cache。确认当前流程手工验证通过后，可以删除旧 registration；这里所说的
+旧 registration 与现在的 `vitos-m365-mcp` 服务目录不是同一个概念。
 
 ## 2. 安装 Python 服务
 
@@ -210,22 +232,23 @@ token cache。确认 OBO 手工验证通过后，可以删除旧 registration；
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e "./services/m365-mcp-http[dev]"
+python -m pip install -e "./vitos-m365-mcp[dev]"
 python -m pip install -e "./apps/agent[dev]"
 ```
 
-### 启动 m365-mcp-http
+### 启动 vitos-m365-mcp
 
 ```bash
-cp services/m365-mcp-http/.env.example services/m365-mcp-http/.env
+cp vitos-m365-mcp/.env.example vitos-m365-mcp/.env
 set -a
-source services/m365-mcp-http/.env
+source vitos-m365-mcp/.env
 set +a
 python -m m365_mcp.server
 ```
 
 最后一条命令在终端 A 持续运行，默认 endpoint 是
-`http://127.0.0.1:8001/mcp`。可配置项为：
+`http://127.0.0.1:8001/mcp`，匿名健康检查为
+`http://127.0.0.1:8001/health`。可配置项为：
 
 ```dotenv
 MCP_HOST=127.0.0.1
@@ -233,17 +256,17 @@ MCP_PORT=8001
 MCP_PATH=/mcp
 ```
 
-MCP 不保存登录状态。每次实际工具调用都要求 Agent 在 HTTP `Authorization` header 中
-传入当前 `/chat` 请求通过 OBO 获取的 Graph Token B。
+MCP 不保存登录状态。`/mcp` 的 `initialize`、`tools/list` 和 `tools/call` 都要求 Agent 在
+HTTP `Authorization` header 中传入当前 `/chat` 请求通过 OBO 获取的 Token M；MCP 只在
+`tools/call` 时继续将 Token M 交换为 Graph Token G。
 
 MCP 提供两个只读工具：
 
 - `search_sharepoint(query, top=5)`：搜索 Graph `driveItem`。
 - `read_document(drive_id, item_id)`：读取 `.docx`、UTF-8 `.txt` 或 `.md`；当前不支持 PDF。
 
-当前 MCP HTTP endpoint 没有独立的 service authentication，默认只允许监听
-`127.0.0.1`。不要将它直接暴露给不受信任网络；生产暴露需要另行设计 TLS、service
-authentication 和网络边界。
+MCP endpoint 受 Entra Token M 保护，但本地默认仍只监听 `127.0.0.1`。跨主机部署还需要
+TLS 和相应的网络边界。
 
 ### 启动 Work Assistant API
 
@@ -270,12 +293,15 @@ ENTRA_WORK_ASSISTANT_API_CLIENT_ID=<vitos-work-assistant-api Application client 
 ENTRA_WORK_ASSISTANT_API_CLIENT_SECRET=<backend-only secret>
 ENTRA_REQUIRED_SCOPE=access_as_user
 M365_MCP_URL=http://127.0.0.1:8001/mcp
+ENTRA_MCP_CLIENT_ID=<vitos-m365-mcp Application client ID>
+# 仅当 MCP 使用自定义 Application ID URI 时设置：
+# ENTRA_MCP_SCOPE=api://mcp.internal.example/access_as_user
 ```
 
 `GET http://127.0.0.1:8000/health` 应匿名返回 `{"status":"ok"}`；没有 Bearer 的
-`POST /chat` 和 `GET /me` 应返回 `401`。Agent 启动时只读取 MCP 工具定义；每次实际工具
-调用建立 stateless session，并携带当前请求的 Token B。MCP 连接或必要配置失败时，应用
-启动直接失败。
+`POST /chat` 和 `GET /me` 应返回 `401`。Agent 启动时不会连接 MCP；每次 `/chat` 先执行
+Token A → Token M OBO，再用 Token M 建立独立的 stateless MCP session。MCP 不可用时该次
+请求失败，不影响 Agent API 进程启动。
 
 ## 3. 启动 Web UI
 
@@ -362,9 +388,10 @@ Python 中 list 和 tuple 有什么区别？
 出差的时候怎么访问公司的内部系统？
 ```
 
-调用链是 Alice Token A → FastAPI identifies Alice → DeepAgent 首次调用 M365 工具时执行
-OBO → m365-mcp-http 收到 Alice Token B → Graph as Alice。SharePoint ACL 应是 Alice 自己
-的 ACL。前一个普通 Python 问题若没有调用 M365 工具，则不会执行 OBO。
+调用链是 Alice Token A → FastAPI identifies Alice → Agent OBO 获取 Alice Token M →
+Pydantic AI 以 Token M 初始化 MCP → MCP 在工具调用时 OBO 获取 Alice Token G → Graph as
+Alice。SharePoint ACL 应是 Alice 自己的 ACL。普通 Python 问题也会为 MCP 初始化获取
+Token M，但不会触发 MCP → Graph 的第二段 OBO。
 
 ### Bob 与 Sign out
 
@@ -382,23 +409,25 @@ npm run build
 
 cd ../..
 python -m pytest apps/agent/tests
-python -m pytest services/m365-mcp-http/tests
+python -m pytest vitos-m365-mcp/tests
 ```
 
 后端认证测试使用本地 RSA signing key，不访问真实 Entra、JWKS、Graph 或 LLM，覆盖
 匿名 health、缺 token、无效 token、错误 audience / issuer / tenant、缺 scope，以及
-有效 Alice/Bob identity。MCP 测试使用 mocked Graph 和本地 Streamable HTTP server；这些
-测试不会验证真实 tenant 的 admin consent、Conditional Access 或 SharePoint ACL。
+有效 Alice/Bob identity。Agent 测试还覆盖 Skill 正文的按需加载、OBO scope、用户历史
+隔离，以及 Alice/Bob 并发运行时各自的 Token M 确实进入真实本地 Streamable HTTP MCP
+请求。它们不会验证真实 tenant 的 admin consent、Conditional Access 或 SharePoint ACL。
 
 ## 已知限制与下一阶段
 
-当前 `thread_id` 只保存在 Agent 进程内存中，刷新页面可以丢失。内部 checkpoint key 已
-绑定 `(tid, oid, thread_id)`，但持久化版本仍需实现 conversation repository 和生命周期。
+当前对话历史只保存在 Agent 进程内存中，进程重启后会丢失。内部 key 已绑定
+`(tid, oid, thread_id)`，同一 thread 的并发请求会串行执行；持久化 memory 和 conversation
+生命周期留给后续阶段。
 
 本 MVP 使用 client secret，生产部署应改用 certificate 或托管的 secret store。当前没有
 实现完整的 Conditional Access / CAE claims-challenge 往返；需要额外交互的 OBO 请求会
-返回安全错误，而不会自动让 SPA 携带 claims 重新登录。MCP 仍只适合监听 localhost；跨
-主机部署需要独立的 TLS、service authentication 和网络边界。
+返回安全错误，而不会自动让 SPA 携带 claims 重新登录。跨主机部署 MCP 时还需要 HTTPS
+和网络边界。
 
 ## 官方资料
 

@@ -17,7 +17,6 @@ from work_assistant.auth import (
     get_current_user,
 )
 from work_assistant.config import Settings
-from work_assistant.mcp import M365MCPClient
 from work_assistant.models import ChatRequest, ChatResponse
 from work_assistant.obo import OboTokenService
 
@@ -51,18 +50,11 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
             return
 
         settings = Settings()
-        mcp_client = M365MCPClient(settings)
-        try:
-            tools = await mcp_client.connect()
-            application.state.chat_service = AgentService(
-                settings,
-                tools,
-                OboTokenService(settings),
-            )
-            yield
-        finally:
-            application.state.chat_service = None
-            await mcp_client.close()
+        application.state.chat_service = AgentService(
+            settings,
+            OboTokenService(settings),
+        )
+        yield
 
     application = FastAPI(
         title="Vito's Work Assistant API",

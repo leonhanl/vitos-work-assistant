@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     entra_work_assistant_api_client_secret: SecretStr = Field(
         validation_alias="ENTRA_WORK_ASSISTANT_API_CLIENT_SECRET"
     )
+    entra_mcp_client_id: UUID = Field(validation_alias="ENTRA_MCP_CLIENT_ID")
+    entra_mcp_scope: str | None = Field(
+        default=None,
+        validation_alias="ENTRA_MCP_SCOPE",
+    )
     entra_required_scope: str = Field(
         default="access_as_user",
         validation_alias="ENTRA_REQUIRED_SCOPE",
@@ -52,6 +57,16 @@ class Settings(BaseSettings):
             raise ValueError("must contain exactly one scope value")
         return value
 
+    @field_validator("entra_mcp_scope")
+    @classmethod
+    def optional_scope_must_be_a_single_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value or any(character.isspace() for character in value):
+            raise ValueError("must contain exactly one scope value")
+        return value
+
     @field_validator("llm_api_key", "entra_work_assistant_api_client_secret")
     @classmethod
     def secret_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
@@ -64,12 +79,11 @@ class Settings(BaseSettings):
         return Path(__file__).resolve().parents[4]
 
     @property
-    def skill_file(self) -> Path:
-        return (
-            self.repository_root
-            / "apps"
-            / "agent"
-            / "skills"
-            / "enterprise-knowledge-search"
-            / "SKILL.md"
+    def skills_directory(self) -> Path:
+        return self.repository_root / "apps" / "agent" / "skills"
+
+    @property
+    def mcp_scope(self) -> str:
+        return self.entra_mcp_scope or (
+            f"api://{self.entra_mcp_client_id}/access_as_user"
         )

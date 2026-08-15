@@ -1,43 +1,25 @@
-"""DeepAgent construction, invocation, and response shaping."""
+"""Pydantic AI agent construction, invocation, and response shaping."""
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
-from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
 
-from deepagents import (
-    GeneralPurposeSubagentProfile,
-    HarnessProfile,
-    create_deep_agent,
-    register_harness_profile,
-)
-from deepagents.backends import StateBackend
-from deepagents.backends.utils import create_file_data
-from langchain_core.messages import AIMessage, HumanMessage
-from langchain_core.tools import BaseTool
-from langgraph.checkpoint.memory import InMemorySaver
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.mcp import MCPToolset
+from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
+from pydantic_ai.models import Model
+from pydantic_ai_harness.skills import Skills
 
 from work_assistant.auth import AuthenticatedRequest
 from work_assistant.config import Settings
 from work_assistant.llm import create_chat_model_client
-from work_assistant.mcp import bind_request_auth
 from work_assistant.models import ChatResponse, Source
-from work_assistant.obo import GraphTokenAcquirer, OboTokenError, RequestAuthContext
+from work_assistant.obo import MCPTokenAcquirer, OboTokenError
 
 logger = logging.getLogger(__name__)
-
-# A ChatOpenAI instance reports its LangChain provider as "openai" even when
-# base_url targets another compatible endpoint. This profile keeps the demo a
-# single Agent and gives it read-only access to its in-memory Skill files.
-register_harness_profile(
-    "openai",
-    HarnessProfile(
-        excluded_tools=frozenset({"write_file", "edit_file"}),
-        general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
-    ),
-)
 
 SYSTEM_PROMPT = """You are Vito's Work Assistant.
 
@@ -47,13 +29,19 @@ non-English source material into English in the final answer.
 
 When a question involves internal company knowledge, IT knowledge-base articles,
 company policies, internal processes, operating manuals, or enterprise documents in
-Microsoft 365, use the available enterprise knowledge search capability first to
-obtain factual support. Never invent internal company facts; clearly state when the
-available material is insufficient. Do not add a Source, Sources, references section,
-or document links to the answer body. The interface separately displays documents
-that were actually read.
+Microsoft 365, load the enterprise-knowledge-search capability before answering.
+Never invent internal company facts; clearly state when the available material is
+insufficient. Do not add a Source, Sources, references section, or document links to
+the answer body. The interface separately displays documents that were actually read.
 
 Answer general-knowledge questions directly."""
+
+
+@dataclass(frozen=True)
+class AgentRunDependencies:
+    """Authentication data that exists only for one Agent run."""
+
+    token_m: str = field(repr=False)
 
 
 class AgentServiceError(RuntimeError):
@@ -65,30 +53,29 @@ class AgentServiceError(RuntimeError):
 
 
 class AgentService:
-    """One process-local DeepAgent with in-memory threaded conversations."""
+    """One shared Agent with per-user, in-memory conversation history."""
 
     def __init__(
         self,
         settings: Settings,
-        tools: Sequence[BaseTool],
-        token_acquirer: GraphTokenAcquirer,
+        token_acquirer: MCPTokenAcquirer,
+        *,
+        model: Model | None = None,
     ) -> None:
         self._token_acquirer = token_acquirer
-        skill_text = settings.skill_file.read_text(encoding="utf-8")
-        self._skill_files = {
-            "/skills/enterprise-knowledge-search/SKILL.md": create_file_data(
-                skill_text
-            )
-        }
-        self._agent_graph = create_deep_agent(
-            model=create_chat_model_client(settings),
-            tools=list(tools),
-            system_prompt=SYSTEM_PROMPT,
-            backend=StateBackend(),
-            skills=["/skills/"],
-            subagents=[],
-            checkpointer=InMemorySaver(),
+        self._histories: dict[str, list[ModelMessage]] = {}
+        self._thread_locks: dict[str, asyncio.Lock] = {}
+        self._agent = Agent(
+            model or create_chat_model_client(settings),
+            deps_type=AgentRunDependencies,
+            instructions=SYSTEM_PROMPT,
+            capabilities=[Skills(settings.skills_directory)],
         )
+
+        @self._agent.toolset(per_run_step=False)
+        def m365_tools(ctx: RunContext[AgentRunDependencies]) -> MCPToolset:
+            """Give this run an MCP connection authenticated as its user."""
+            return MCPToolset(str(settings.m365_mcp_url), auth=ctx.deps.token_m)
 
     async def chat(
         self,
@@ -96,119 +83,78 @@ class AgentService:
         message: str,
         authenticated: AuthenticatedRequest,
     ) -> ChatResponse:
-        logger.info("Agent execution started", extra={"thread_id": thread_id})
-        auth_context = RequestAuthContext(
-            user=authenticated.user,
-            token_a=authenticated.token_a,
-            token_acquirer=self._token_acquirer,
-        )
         internal_thread_id = (
             f"{authenticated.user.tid}:{authenticated.user.oid}:{thread_id}"
         )
+        logger.info(
+            "Agent execution started",
+            extra={"thread_id": thread_id, "user_oid": authenticated.user.oid},
+        )
+
         try:
-            with bind_request_auth(auth_context):
-                result = await self._agent_graph.ainvoke(
-                    {
-                        "messages": [{"role": "user", "content": message}],
-                        "files": self._skill_files,
-                    },
-                    config={"configurable": {"thread_id": internal_thread_id}},
+            token_m = await self._token_acquirer.acquire_mcp_token(
+                authenticated.token_a
+            )
+            lock = self._thread_locks.setdefault(internal_thread_id, asyncio.Lock())
+            async with lock:
+                result = await self._agent.run(
+                    message,
+                    deps=AgentRunDependencies(token_m=token_m),
+                    message_history=self._histories.get(internal_thread_id),
                 )
-            messages = result.get("messages")
-            if not isinstance(messages, list):
-                raise RuntimeError("DeepAgent returned no messages")
-            current_turn = _messages_from_last_user(messages)
-            answer = _last_answer(current_turn)
-            sources = normalize_sources(current_turn)
-            return ChatResponse(thread_id=thread_id, answer=answer, sources=sources)
+                self._histories[internal_thread_id] = result.all_messages()
+
+            answer = result.output.strip()
+            if not answer:
+                raise AgentServiceError(
+                    502,
+                    "invalid_agent_response",
+                    "The configured LLM did not return a usable final answer.",
+                )
+            return ChatResponse(
+                thread_id=thread_id,
+                answer=answer,
+                sources=normalize_sources(result.new_messages()),
+            )
+        except OboTokenError as exc:
+            if exc.code == "obo_authorization_required":
+                raise AgentServiceError(
+                    403,
+                    "m365_authorization_required",
+                    "Microsoft 365 access requires administrator consent or user interaction.",
+                ) from exc
+            raise AgentServiceError(
+                503,
+                "m365_authentication_unavailable",
+                "Microsoft 365 authentication is temporarily unavailable.",
+            ) from exc
         except AgentServiceError:
             raise
         except Exception as exc:
-            raise classify_agent_error(exc) from exc
+            raise AgentServiceError(
+                502,
+                "agent_execution_failed",
+                "The assistant could not complete this request.",
+            ) from exc
 
 
-def _messages_from_last_user(messages: list[Any]) -> list[Any]:
-    """截取最后一轮对话：最后一条用户消息，以及它之后的所有消息。
-
-    DeepAgent 配置 checkpointer 后，返回的 ``messages`` 可能包含整个线程的
-    历史消息，而不仅仅是当前一轮。例如输入可以表示为：
-
-    ``[用户“VPN 是什么？”, AI“VPN 是……”, 用户“如何安装？”,``
-    ``AI 调用 search_sharepoint, 工具返回安装文档, AI“请按以下步骤安装……”]``
-
-    这个函数会返回：
-
-    ``[用户“如何安装？”, AI 调用 search_sharepoint, 工具返回安装文档,``
-    ``AI“请按以下步骤安装……”]``
-
-    这样后续提取答案和来源时，就不会误用上一轮的内容。如果消息中没有用户
-    消息，则保守地返回原列表。
-    """
-    # 从末尾向前找，遇到的第一条用户消息就是“最后一轮”的起点。
-    for index in range(len(messages) - 1, -1, -1):
-        message = messages[index]
-        # 优先识别 LangChain 的 HumanMessage，同时兼容只有 type="human"
-        # 属性的其他消息实现。
-        if isinstance(message, HumanMessage) or getattr(message, "type", None) == "human":
-            # 切片包含用户消息本身，以及之后的工具调用、工具结果和最终回答。
-            return messages[index:]
-    return messages
-
-
-def _last_answer(messages: Iterable[Any]) -> str:
-    """返回消息序列中最后一条非空的 AI 文本回答。
-
-    例如，一轮工具调用可能包含：
-
-    ``[用户“如何安装 VPN？”, AI(content="", 工具调用),``
-    ``工具返回安装文档, AI(content="请按以下步骤安装……")]``
-
-    第一条 AI 消息只有工具调用，没有文本内容。函数从后向前搜索并跳过它，最终
-    返回 ``"请按以下步骤安装……"``。如果所有 AI 消息都没有可用文本，则抛出
-    一个可安全返回给 API 调用方的错误。
-    """
-    # 从末尾查找，因为最终回答通常是当前轮最后一条 AI 消息。
-    for message in reversed(list(messages)):
-        # 兼容标准 AIMessage 和其他 type="ai" 的消息实现。
-        if isinstance(message, AIMessage) or getattr(message, "type", None) == "ai":
-            # 模型 content 既可能是字符串，也可能是文本块列表，统一交给
-            # _content_text 转换成字符串。
-            text = _content_text(getattr(message, "content", ""))
-            if text:
-                return text
-    # Agent 执行结束却没有产生文本回答时，向上层报告稳定的 502 错误。
-    raise AgentServiceError(
-        502,
-        "invalid_agent_response",
-        "The configured LLM did not return a usable final answer.",
-    )
-
-
-def _content_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if not isinstance(content, list):
-        return ""
-    parts: list[str] = []
-    for block in content:
-        if not isinstance(block, Mapping):
-            continue
-        text = block.get("text")
-        if isinstance(text, str) and text.strip():
-            parts.append(text.strip())
-    return "\n".join(parts)
-
-
-def normalize_sources(messages: Iterable[Any]) -> list[Source]:
+def normalize_sources(messages: Iterable[ModelMessage]) -> list[Source]:
     """Extract deduplicated sources from documents actually read this turn."""
     seen: set[tuple[str, str]] = set()
     sources: list[Source] = []
+
     for message in messages:
-        if getattr(message, "name", None) != "read_document":
+        if not isinstance(message, ModelRequest):
             continue
-        for mapping in _iter_mappings(_tool_data(message)):
-            name = mapping.get("name")
-            url = mapping.get("web_url")
+        for part in message.parts:
+            if (
+                not isinstance(part, ToolReturnPart)
+                or part.tool_name != "read_document"
+                or not isinstance(part.content, Mapping)
+            ):
+                continue
+            name = part.content.get("name")
+            url = part.content.get("web_url")
             if (
                 isinstance(name, str)
                 and name.strip()
@@ -220,74 +166,3 @@ def normalize_sources(messages: Iterable[Any]) -> list[Source]:
                     seen.add(key)
                     sources.append(Source(name=name.strip(), url=url))
     return sources
-
-
-def _tool_data(message: Any) -> Any:
-    """Return a tool message's structured payload: its artifact or parsed content."""
-    artifact = getattr(message, "artifact", None)
-    if artifact is not None:
-        return artifact
-
-    content = getattr(message, "content", None)
-    if isinstance(content, str):
-        try:
-            return json.loads(content)
-        except (TypeError, json.JSONDecodeError):
-            return None
-    return content
-
-
-def _iter_mappings(value: Any) -> Iterable[Mapping[str, Any]]:
-    """Yield every mapping nested anywhere inside dicts/lists."""
-    if isinstance(value, Mapping):
-        yield value
-        for child in value.values():
-            yield from _iter_mappings(child)
-    elif isinstance(value, list):
-        for child in value:
-            yield from _iter_mappings(child)
-
-
-def classify_agent_error(exc: Exception) -> AgentServiceError:
-    """Collapse dependency failures into stable errors without leaking raw details."""
-    obo_error = _find_cause(exc, OboTokenError)
-    if isinstance(obo_error, OboTokenError):
-        if obo_error.code == "obo_authorization_required":
-            return AgentServiceError(
-                403,
-                "m365_authorization_required",
-                "Microsoft 365 access requires administrator consent or user interaction.",
-            )
-        return AgentServiceError(
-            503,
-            "m365_authentication_unavailable",
-            "Microsoft 365 authentication is temporarily unavailable.",
-        )
-
-    detail = str(exc).lower()
-    if "graph access token" in detail:
-        return AgentServiceError(
-            503,
-            "m365_authentication_unavailable",
-            "Microsoft 365 authentication is temporarily unavailable.",
-        )
-    return AgentServiceError(
-        502,
-        "agent_execution_failed",
-        "The assistant could not complete this request.",
-    )
-
-
-def _find_cause(
-    exc: BaseException,
-    error_type: type[BaseException],
-) -> BaseException | None:
-    """Find a typed cause without exposing dependency exception text."""
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        if isinstance(current, error_type):
-            return current
-        seen.add(id(current))
-        current = current.__cause__ or current.__context__
-    return None
