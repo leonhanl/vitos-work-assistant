@@ -6,11 +6,9 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="${ROOT_DIR}/logs"
 VENV_DIR="${ROOT_DIR}/.venv"
 
-MCP_ENV="${ROOT_DIR}/vitos-m365-mcp/.env"
 AGENT_ENV="${ROOT_DIR}/apps/agent/.env"
 WEB_ENV="${ROOT_DIR}/apps/web/.env"
 
-MCP_LOG="${LOG_DIR}/m365-mcp.log"
 AGENT_LOG="${LOG_DIR}/agent.log"
 WEB_LOG="${LOG_DIR}/web.log"
 
@@ -66,24 +64,6 @@ wait_for_url() {
   return 1
 }
 
-start_mcp() {
-  (
-    cd "$ROOT_DIR"
-    set -a
-    # shellcheck disable=SC1090
-    source "$MCP_ENV"
-    set +a
-    export PYTHONUNBUFFERED=1
-    exec "$VENV_DIR/bin/python" -m m365_mcp.server
-  ) >>"$MCP_LOG" 2>&1 &
-  local pid=$!
-  PIDS="${PIDS} ${pid}"
-  printf '正在启动 m365-mcp（PID %s）...\n' "$pid"
-  wait_for_url "m365-mcp" "http://127.0.0.1:8001/health" "$pid" "$MCP_LOG"
-  printf 'm365-mcp 已响应，额外等待 2 秒确保启动完成...\n'
-  sleep 2
-}
-
 start_agent() {
   (
     cd "$ROOT_DIR"
@@ -112,7 +92,6 @@ start_web() {
   wait_for_url "Web" "http://localhost:5173" "$pid" "$WEB_LOG"
 }
 
-require_file "$MCP_ENV"
 require_file "$AGENT_ENV"
 require_file "$WEB_ENV"
 [[ -x "$VENV_DIR/bin/python" ]] || fail "未找到 ${VENV_DIR}/bin/python，请先创建并安装 Python 虚拟环境。"
@@ -122,21 +101,20 @@ command -v curl >/dev/null 2>&1 || fail "未找到 curl。"
 
 mkdir -p "$LOG_DIR"
 find "$LOG_DIR" -maxdepth 1 -type f -name '*.log' -delete
-touch "$MCP_LOG" "$AGENT_LOG" "$WEB_LOG"
+touch "$AGENT_LOG" "$WEB_LOG"
 printf '旧日志已清除：%s\n' "$LOG_DIR"
 
 trap stop_services EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-start_mcp
 start_agent
 start_web
 
 printf '\n本地手工测试环境已启动。\n'
 printf 'Web:   http://localhost:5173\n'
 printf 'Agent: http://127.0.0.1:8000\n'
-printf 'MCP:   http://127.0.0.1:8001/mcp\n'
+printf 'MCP:   使用 apps/agent/.env 中配置的外部 M365_MCP_URL\n'
 printf '日志:  %s\n' "$LOG_DIR"
 printf '按 Ctrl+C 停止全部服务。\n\n'
 

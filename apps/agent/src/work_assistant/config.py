@@ -37,10 +37,7 @@ class Settings(BaseSettings):
         default="access_as_user",
         validation_alias="ENTRA_REQUIRED_SCOPE",
     )
-    m365_mcp_url: AnyHttpUrl = Field(
-        default=AnyHttpUrl("http://127.0.0.1:8001/mcp"),
-        validation_alias="M365_MCP_URL",
-    )
+    m365_mcp_url: AnyHttpUrl = Field(validation_alias="M365_MCP_URL")
 
     @field_validator("llm_model", "entra_required_scope")
     @classmethod

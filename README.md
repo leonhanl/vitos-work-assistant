@@ -4,8 +4,9 @@ Vito's Work Assistant 是一个学习型企业 AI Assistant Demo。它现在包�
 Vanilla JavaScript Web UI、Microsoft Entra 单租户登录、受 Token A 保护的 FastAPI，
 以及使用两段 OBO 保持当前用户身份的 Pydantic AI → Streamable HTTP MCP 链路。
 
-本 README 描述 Work Assistant 的整体配置、运行方式与集成边界；待迁出的 M365 MCP
-同时维护自己的独立文档：[`vitos-m365-mcp/README.md`](vitos-m365-mcp/README.md)。
+本 README 描述 Work Assistant 的整体配置、运行方式与集成边界。M365 MCP 已迁移到
+独立的 [`vitos-m365-mcp`](https://github.com/leonhanl/vitos-m365-mcp) 仓库，并在那里维护
+自己的配置、运行和部署文档。
 
 ## 当前架构
 
@@ -33,7 +34,7 @@ Pydantic AI Agent
    │
    │ Streamable HTTP；Token M: aud = vitos-m365-mcp
    ▼
-vitos-m365-mcp
+vitos-m365-mcp（独立服务）
    │
    │ validate Token M；每次工具调用 OBO Token M → Token G
    ▼
@@ -70,7 +71,6 @@ vitos-work-assistant/
 ├── apps/
 │   ├── web/                  # Vite + Vanilla JS + MSAL Browser
 │   └── agent/                # FastAPI + Token A validation + Pydantic AI
-├── vitos-m365-mcp/           # 自包含、待迁出为独立 repo 的 MCP service
 └── services/
     └── salesforce-mcp-http/  # 占位；即将实现
 ```
@@ -105,13 +105,14 @@ response：
 ## 1. 手工配置 Microsoft Entra
 
 代码不会用 Azure CLI、PowerShell、Terraform 或 Graph API 创建 registration。当前阶段
-需要在同一个 Vito tenant 中手工创建三个应用：
+需要在同一个 Vito tenant 中准备以下三个应用，但本仓库只负责配置前两个；
+`vitos-m365-mcp` 由独立 MCP 仓库负责创建和维护，本仓库只检查它的集成配置是否存在：
 
-| App Registration | OAuth 角色 | 当前权限 |
-|---|---|---|
-| `vitos-work-assistant-client` | Browser SPA public client | Work Assistant API `access_as_user` delegated permission |
-| `vitos-work-assistant-api` | Protected Web API / confidential client | 暴露自己的 `access_as_user`；调用 MCP 的 `access_as_user` delegated permission |
-| `vitos-m365-mcp` | Protected MCP resource / confidential client | 暴露自己的 `access_as_user`；Microsoft Graph `Files.Read.All` delegated permission |
+| App Registration | 配置归属 | OAuth 角色 | 当前权限 |
+|---|---|---|---|
+| `vitos-work-assistant-client` | 本仓库 | Browser SPA public client | Work Assistant API `access_as_user` delegated permission |
+| `vitos-work-assistant-api` | 本仓库 | Protected Web API / confidential client | 暴露自己的 `access_as_user`；调用 MCP 的 `access_as_user` delegated permission |
+| `vitos-m365-mcp` | 独立 MCP 仓库 | Protected MCP resource / confidential client | 暴露自己的 `access_as_user`；Microsoft Graph `Files.Read.All` delegated permission |
 
 三个应用组成 Token A → Token M → Token G 的委托链路。
 所有需要批准的 delegated permissions 都由管理员预先授予 tenant-wide admin consent，
@@ -149,9 +150,11 @@ New registration**：
 6. 进入 **Manifest**，在已有 `api` 对象内将 `requestedAccessTokenVersion` 设为数字
    `2`；不要覆盖 portal 刚创建的 `oauth2PermissionScopes`。
 
-7. 进入 **API permissions → Add a permission → My APIs**，添加
+7. 确认下文列出的外部 MCP 前置条件后，进入
+   **API permissions → Add a permission → My APIs**，添加
    `vitos-m365-mcp/access_as_user` delegated permission，并由管理员授予 tenant-wide
-   admin consent。
+   admin consent。若 MCP 或其 scope 未出现在 **My APIs**，不要在本仓库创建替代的 MCP
+   registration；应先由 MCP owner 修复独立服务的 Entra 配置。
 8. 进入 **Certificates & secrets → Client secrets**，为本地 MVP 创建 secret，并将它只配置
    到 Agent 后端。不要把 secret 提交到仓库或发送到浏览器。生产环境应改用 certificate。
 
@@ -205,72 +208,54 @@ SPA 是 public client，不能安全保存 credential。不要创建或放入前
 certificate、Graph token、refresh token、backend secret 或 OBO secret。Tenant ID 与
 client ID 属于公开客户端配置，不是 confidential secret。
 
-### 1.3 `vitos-m365-mcp`
+### 1.3 检查外部 `vitos-m365-mcp` 前置条件
 
-按 [`vitos-m365-mcp/README.md`](vitos-m365-mcp/README.md) 创建独立的单租户
-registration，并完成以下关键配置：
+MCP App Registration 的创建、Graph 权限、服务端凭据和运行配置都属于独立的
+[`vitos-m365-mcp` 仓库](https://github.com/leonhanl/vitos-m365-mcp#readme)。不要在本仓库
+重新创建或维护这些配置。接入 Work Assistant 前，由双方 owner 在 Microsoft Entra 和部署
+环境中确认：
 
-1. 暴露 `api://<MCP_CLIENT_ID>/access_as_user` delegated scope。
-2. 添加 Microsoft Graph `Files.Read.All` delegated permission，并授予 admin consent。
-3. 创建仅供 MCP 服务端执行 Token M → Token G OBO 的 client secret。
-4. 在 **Authorized client applications** 中预授权 `vitos-work-assistant-api` 使用
-   `access_as_user`。
+1. `vitos-m365-mcp` App Registration 已存在于 Work Assistant 所在的同一个 tenant，并已
+   提供正确的 Directory tenant ID 和 Application client ID。
+2. MCP 已启用 v2 access token，并暴露处于 Enabled 状态的完整 delegated scope：
+   `api://<MCP_CLIENT_ID>/access_as_user`；如果使用自定义 Application ID URI，则提供准确的
+   完整 scope。
+3. MCP owner 已确认 Microsoft Graph `Files.Read.All` delegated permission 获得 tenant-wide
+   admin consent，并且 MCP 服务端凭据存在且可用。Work Assistant 只确认这些配置存在，
+   不读取、复制或保存 MCP client secret。
+4. MCP owner 已在 MCP 的 **Authorized client applications** 中加入
+   `vitos-work-assistant-api` 的 Application client ID，并允许使用 `access_as_user`。
+5. `vitos-work-assistant-api` 的 **API permissions** 中已经添加 MCP `access_as_user`
+   delegated permission，且状态显示为已获得 tenant-wide admin consent。
+6. 独立 MCP 服务的 `/health` 可以从预期运行环境访问，最终 Streamable HTTP endpoint 与
+   Agent 的 `M365_MCP_URL` 一致。
 
-Graph permission 和 MCP secret 都属于 MCP registration，不属于 SPA，也不要放回 Agent
-registration。
+以上任何一项缺失时，应由对应 owner 在所属 App Registration、独立 MCP 仓库或部署平台中
+补齐；不要把 Graph permission、MCP secret 或 MCP 服务端配置放入 Work Assistant。
 
-### 1.4 旧 Device Code public client registration
+## 2. 启动后端服务
 
-现有集成不再使用早期为 Device Code Flow 创建的 public client registration 或本地
-MSAL token cache。确认当前流程手工验证通过后，可以删除旧 registration；这里所说的
-旧 registration 与现在的 `vitos-m365-mcp` 服务目录不是同一个概念。
+### 2.1 独立启动 `vitos-m365-mcp`
 
-## 2. 安装 Python 服务
+先按独立
+[`vitos-m365-mcp` 仓库](https://github.com/leonhanl/vitos-m365-mcp#本地开发)的说明完成
+配置并启动 MCP。它拥有独立的 Python 3.13+、`uv` 环境、`.env`、测试和部署生命周期，
+不安装到本仓库的虚拟环境中。
 
-需要 Python 3.11+：
+本地开发时，MCP 通常可通过 `http://127.0.0.1:8001/mcp` 访问；实际地址以独立服务的
+`MCP_RESOURCE_URL` 和部署配置为准。跨主机或生产部署必须使用外部可访问的 HTTPS endpoint。
+
+### 2.2 安装并启动 Work Assistant API
+
+Agent 需要 Python 3.11+：
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e "./vitos-m365-mcp[dev]"
 python -m pip install -e "./apps/agent[dev]"
 ```
 
-### 启动 vitos-m365-mcp
-
-```bash
-cp vitos-m365-mcp/.env.example vitos-m365-mcp/.env
-set -a
-source vitos-m365-mcp/.env
-set +a
-python -m m365_mcp.server
-```
-
-最后一条命令在终端 A 持续运行，默认 endpoint 是
-`http://127.0.0.1:8001/mcp`，匿名健康检查为
-`http://127.0.0.1:8001/health`。可配置项为：
-
-```dotenv
-MCP_HOST=127.0.0.1
-MCP_PORT=8001
-MCP_PATH=/mcp
-```
-
-MCP 不保存登录状态。`/mcp` 的 `initialize`、`tools/list` 和 `tools/call` 都要求 Agent 在
-HTTP `Authorization` header 中传入当前 `/chat` 请求通过 OBO 获取的 Token M；MCP 只在
-`tools/call` 时继续将 Token M 交换为 Graph Token G。
-
-MCP 提供两个只读工具：
-
-- `search_sharepoint(query, top=5)`：搜索 Graph `driveItem`。
-- `read_document(drive_id, item_id)`：读取 `.docx`、UTF-8 `.txt` 或 `.md`；当前不支持 PDF。
-
-MCP endpoint 受 Entra Token M 保护，但本地默认仍只监听 `127.0.0.1`。跨主机部署还需要
-TLS 和相应的网络边界。
-
-### 启动 Work Assistant API
-
-在终端 B：
+在另一个终端中：
 
 ```bash
 source .venv/bin/activate
@@ -292,6 +277,7 @@ ENTRA_TENANT_ID=<Directory tenant ID>
 ENTRA_WORK_ASSISTANT_API_CLIENT_ID=<vitos-work-assistant-api Application client ID>
 ENTRA_WORK_ASSISTANT_API_CLIENT_SECRET=<backend-only secret>
 ENTRA_REQUIRED_SCOPE=access_as_user
+# 必填；指向独立运行的 MCP 服务
 M365_MCP_URL=http://127.0.0.1:8001/mcp
 ENTRA_MCP_CLIENT_ID=<vitos-m365-mcp Application client ID>
 # 仅当 MCP 使用自定义 Application ID URI 时设置：
@@ -337,15 +323,17 @@ Vite proxy 会显式删除 `/api`，所以本地开发不需要 FastAPI CORS。`
 
 ### 一键启动本地手工测试环境
 
-完成上述 Python、前端依赖和三个 `.env` 文件的配置后，可在仓库根目录运行：
+确认独立 MCP 已经运行，并完成本仓库的 Python、前端依赖、`apps/agent/.env` 和
+`apps/web/.env` 配置后，可在仓库根目录运行：
 
 ```bash
 ./scripts/start-local.sh
 ```
 
-脚本会按 `m365-mcp` → `Agent` → `Web` 的顺序启动，并等待前一个服务就绪后再启动下一个。
-每次启动会清除 `logs/` 下的旧 `.log` 文件，新日志分别写入 `m365-mcp.log`、`agent.log`
-和 `web.log`。按 `Ctrl+C` 可停止这三个服务。该脚本只拉起手工测试环境，不执行自动化测试。
+脚本会按 `Agent` → `Web` 的顺序启动，并等待 Agent 就绪后再启动 Web。每次启动会清除
+`logs/` 下的旧 `.log` 文件，新日志分别写入 `agent.log` 和 `web.log`。按 `Ctrl+C` 可停止
+这两个服务；独立 MCP 的生命周期仍由它自己的仓库或部署平台管理。该脚本只拉起本仓库的
+手工测试环境，不执行自动化测试。
 
 ## 4. Alice / Bob 手工验证
 
@@ -361,8 +349,8 @@ Vite proxy 会显式删除 `/api`，所以本地开发不需要 FastAPI CORS。`
 如果仍然出现 **Permissions requested (1 of 2 apps)** / **(2 of 2 apps)**，依次检查：
 
 1. client 的 `access_as_user` 是否已经显示 admin consent granted；
-2. client registration 是否误加 Microsoft Graph 权限；Graph `Files.Read.All` 应只添加
-   在 API registration；
+2. client registration 是否误加 Microsoft Graph 权限；并由 MCP owner 确认 Graph
+   `Files.Read.All` 只配置在外部 MCP registration；
 3. API 的 **Authorized client applications** 是否包含正确的 SPA Client ID 和
    `access_as_user` permission；
 4. API manifest 的 `knownClientApplications` 是否误填了 SPA Client ID；本项目应为空。
@@ -385,7 +373,7 @@ Python 中 list 和 tuple 有什么区别？
 再输入：
 
 ```text
-出差的时候怎么访问公司的内部系统？
+How to connect to the corporate VPN? 
 ```
 
 调用链是 Alice Token A → FastAPI identifies Alice → Agent OBO 获取 Alice Token M →
@@ -409,7 +397,6 @@ npm run build
 
 cd ../..
 python -m pytest apps/agent/tests
-python -m pytest vitos-m365-mcp/tests
 ```
 
 后端认证测试使用本地 RSA signing key，不访问真实 Entra、JWKS、Graph 或 LLM，覆盖
@@ -417,6 +404,8 @@ python -m pytest vitos-m365-mcp/tests
 有效 Alice/Bob identity。Agent 测试还覆盖 Skill 正文的按需加载、OBO scope、用户历史
 隔离，以及 Alice/Bob 并发运行时各自的 Token M 确实进入真实本地 Streamable HTTP MCP
 请求。它们不会验证真实 tenant 的 admin consent、Conditional Access 或 SharePoint ACL。
+MCP Server 自身的认证、Graph、文档解析和端到端测试由独立的
+[`vitos-m365-mcp`](https://github.com/leonhanl/vitos-m365-mcp#readme) 仓库运行。
 
 ## 已知限制与下一阶段
 

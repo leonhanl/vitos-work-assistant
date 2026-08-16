@@ -16,6 +16,7 @@ def _set_required_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENTRA_TENANT_ID", TENANT_ID)
     monkeypatch.setenv("ENTRA_WORK_ASSISTANT_API_CLIENT_ID", API_CLIENT_ID)
     monkeypatch.setenv("ENTRA_WORK_ASSISTANT_API_CLIENT_SECRET", "test-secret")
+    monkeypatch.setenv("M365_MCP_URL", "http://127.0.0.1:8001/mcp")
     monkeypatch.setenv("ENTRA_MCP_CLIENT_ID", MCP_CLIENT_ID)
 
 
@@ -32,7 +33,6 @@ def test_llm_configuration_accepts_openai_compatible_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required_configuration(monkeypatch)
-    monkeypatch.delenv("M365_MCP_URL", raising=False)
 
     settings = Settings()
 
@@ -63,6 +63,16 @@ def test_m365_streamable_http_endpoint_is_configurable(
     settings = Settings()
 
     assert str(settings.m365_mcp_url) == "http://m365.internal:9000/custom-mcp"
+
+
+def test_m365_streamable_http_endpoint_is_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_configuration(monkeypatch)
+    monkeypatch.delenv("M365_MCP_URL")
+
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 def test_mcp_scope_can_override_the_default_application_id_uri(
