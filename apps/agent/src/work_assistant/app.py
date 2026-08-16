@@ -54,6 +54,11 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
             settings,
             OboTokenService(settings),
         )
+        logger.info(
+            "Skills artifact loaded version=%s directory=%s",
+            settings.skills_version,
+            settings.skills_directory,
+        )
         yield
 
     application = FastAPI(

@@ -1,0 +1,52 @@
+name: vitos-work-assistant
+
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: apps/agent/Dockerfile
+    env_file:
+      - ./apps/agent/.env
+    environment:
+      SKILLS_DIRECTORY: /opt/work-assistant/skills
+      SKILLS_VERSION: ${SKILLS_ARTIFACT_VERSION:-local}
+    init: true
+    volumes:
+      - type: bind
+        source: ${SKILLS_ARTIFACT_PATH:-./apps/agent/skills}
+        target: /opt/work-assistant/skills
+        read_only: true
+        bind:
+          create_host_path: false
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      no_cache: true
+      secrets:
+        - web_env
+    depends_on:
+      agent:
+        condition: service_healthy
+    init: true
+    ports:
+      - "5173:80"
+
+secrets:
+  web_env:
+    file: ./apps/web/.env

@@ -56,9 +56,10 @@ trimming。由于受保护的 MCP 在 `initialize` 和 `tools/list` 阶段就要
 Token M、Token G 都不会进入 prompt、对话历史、工具参数或日志。
 
 Agent 进程只创建一个共享的 Pydantic AI `Agent`；用户状态不放在 Agent 对象里，而是用
-`(tid, oid, thread_id)` 索引独立的内存消息历史。`apps/agent/skills/` 下每个子目录中的
-`SKILL.md` 会在启动时被发现，模型最初只看到 skill 的名称和描述；调用
-`load_capability` 后才加载完整正文。修改或新增 skill 后需要重启 Agent 进程。
+`(tid, oid, thread_id)` 索引独立的内存消息历史。Skills 作为独立、版本化 artifact 通过
+`SKILLS_DIRECTORY` 注入；目录下每个子目录中的 `SKILL.md` 会在启动时被发现，模型最初
+只看到 skill 的名称和描述，调用 `load_capability` 后才加载完整正文。Agent 启动时会校验
+artifact，并记录 `SKILLS_VERSION`；修改或切换 artifact 后需要重启 Agent 进程。
 
 这里的 **admin consent** 与登录是两件事：管理员代表 tenant 预先批准 delegated
 permission，因此普通用户登录时不应看到 **Permissions requested** 页面；用户仍需完成
@@ -273,6 +274,8 @@ uvicorn work_assistant.app:app --reload --host 127.0.0.1 --port 8000
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_API_KEY=<secret>
 LLM_MODEL=<tool-calling model>
+SKILLS_DIRECTORY=/absolute/path/to/work-assistant-skills
+SKILLS_VERSION=<immutable artifact version>
 ENTRA_TENANT_ID=<Directory tenant ID>
 ENTRA_WORK_ASSISTANT_API_CLIENT_ID=<vitos-work-assistant-api Application client ID>
 ENTRA_WORK_ASSISTANT_API_CLIENT_SECRET=<backend-only secret>
@@ -334,6 +337,44 @@ Vite proxy 会显式删除 `/api`，所以本地开发不需要 FastAPI CORS。`
 `logs/` 下的旧 `.log` 文件，新日志分别写入 `agent.log` 和 `web.log`。按 `Ctrl+C` 可停止
 这两个服务；独立 MCP 的生命周期仍由它自己的仓库或部署平台管理。该脚本只拉起本仓库的
 手工测试环境，不执行自动化测试。
+
+### 使用 Docker Compose 启动 Web 与 Agent
+
+Docker 运行方式不使用 `scripts/start-local.sh`。确认 `apps/agent/.env` 和
+`apps/web/.env` 已配置后，先在仓库根目录构建两个 container image：
+
+```bash
+docker compose build
+```
+
+构建完成后，指定运行时使用的 Skills artifact 并启动容器：
+
+```bash
+export SKILLS_ARTIFACT_PATH=/absolute/path/to/work-assistant-skills
+export SKILLS_ARTIFACT_VERSION=2026.08.16
+docker compose up
+```
+
+Compose 会启动两个容器：Nginx Web 暴露在 `http://localhost:5173`，Agent 只在
+Compose 内部网络监听 `8000`。Nginx 将 `/api/*` 转发到 Agent，并在转发时删除 `/api`
+前缀。Agent 的运行时配置来自 `apps/agent/.env`，包括其中配置的 `M365_MCP_URL`。
+
+Skills 不会复制进 Agent 镜像。Compose 将 `SKILLS_ARTIFACT_PATH` 指向的版本化 artifact
+只读挂载到 `/opt/work-assistant/skills`，并将 `SKILLS_ARTIFACT_VERSION` 传给 Agent 记录。
+artifact 必须至少包含一个 `<skill>/SKILL.md`，否则 Agent 会在启动时失败。当前仓库中的
+`apps/agent/skills` 只是迁移期间的本地开发默认值；正式部署应显式提供独立 artifact 的
+绝对路径与不可变版本。
+
+Web 的 `VITE_*` 配置只在 Vite 构建时使用。Compose 通过 BuildKit secret 临时挂载
+`apps/web/.env`，该文件不会复制进构建上下文或最终 Nginx 镜像；这些 `VITE_*` 标识符仍会
+按 Vite 的正常行为出现在浏览器端静态资源中。Web 构建禁用 layer cache，确保修改
+`apps/web/.env` 后再次构建会生成新配置。
+
+停止容器：
+
+```bash
+docker compose down
+```
 
 ## 4. Alice / Bob 手工验证
 

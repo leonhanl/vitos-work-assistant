@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     llm_base_url: AnyHttpUrl = Field(validation_alias="LLM_BASE_URL")
     llm_api_key: SecretStr = Field(validation_alias="LLM_API_KEY")
     llm_model: str = Field(validation_alias="LLM_MODEL")
+    skills_directory: Path = Field(validation_alias="SKILLS_DIRECTORY")
+    skills_version: str = Field(validation_alias="SKILLS_VERSION")
     entra_tenant_id: UUID = Field(validation_alias="ENTRA_TENANT_ID")
     entra_work_assistant_api_client_id: UUID = Field(
         validation_alias="ENTRA_WORK_ASSISTANT_API_CLIENT_ID"
@@ -39,7 +41,7 @@ class Settings(BaseSettings):
     )
     m365_mcp_url: AnyHttpUrl = Field(validation_alias="M365_MCP_URL")
 
-    @field_validator("llm_model", "entra_required_scope")
+    @field_validator("llm_model", "skills_version", "entra_required_scope")
     @classmethod
     def must_not_be_blank(cls, value: str) -> str:
         value = value.strip()
@@ -71,13 +73,18 @@ class Settings(BaseSettings):
             raise ValueError("must not be blank")
         return value
 
-    @property
-    def repository_root(self) -> Path:
-        return Path(__file__).resolve().parents[4]
-
-    @property
-    def skills_directory(self) -> Path:
-        return self.repository_root / "apps" / "agent" / "skills"
+    @field_validator("skills_directory")
+    @classmethod
+    def skills_artifact_must_be_usable(cls, value: Path) -> Path:
+        try:
+            directory = value.expanduser().resolve(strict=True)
+        except OSError:
+            raise ValueError("must point to an existing skills artifact") from None
+        if not directory.is_dir():
+            raise ValueError("must point to a skills artifact directory")
+        if not any(path.is_file() for path in directory.glob("*/SKILL.md")):
+            raise ValueError("must contain at least one <skill>/SKILL.md")
+        return directory
 
     @property
     def mcp_scope(self) -> str:
