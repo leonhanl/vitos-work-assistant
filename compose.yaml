@@ -45,7 +45,7 @@ services:
         condition: service_healthy
     init: true
     ports:
-      - "5173:80"
+      - "${WEB_PORT:-5173}:80"
 
 secrets:
   web_env:

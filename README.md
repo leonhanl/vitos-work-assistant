@@ -355,7 +355,19 @@ export SKILLS_ARTIFACT_VERSION=2026.08.16
 docker compose up
 ```
 
-Compose 会启动两个容器：Nginx Web 暴露在 `http://localhost:5173`，Agent 只在
+Web 的宿主机端口默认为 `5173`。staging 环境可通过根目录 `.env` 配置为 `80`：
+
+```dotenv
+WEB_PORT=80
+```
+
+也可以在启动时显式指定环境文件：
+
+```bash
+docker compose --env-file .env.staging up -d
+```
+
+Compose 会启动两个容器：Nginx Web 默认暴露在 `http://localhost:5173`，Agent 只在
 Compose 内部网络监听 `8000`。Nginx 将 `/api/*` 转发到 Agent，并在转发时删除 `/api`
 前缀。Agent 的运行时配置来自 `apps/agent/.env`，包括其中配置的 `M365_MCP_URL`。
 
