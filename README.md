@@ -285,6 +285,8 @@ M365_MCP_URL=http://127.0.0.1:8001/mcp
 ENTRA_MCP_CLIENT_ID=<vitos-m365-mcp Application client ID>
 # 仅当 MCP 使用自定义 Application ID URI 时设置：
 # ENTRA_MCP_SCOPE=api://mcp.internal.example/access_as_user
+# 可选；配置后作为 x-portkey-api-key 发送给 vitos-m365-mcp：
+# PORTKEY_API_KEY=<secret>
 ```
 
 `GET http://127.0.0.1:8000/health` 应匿名返回 `{"status":"ok"}`；没有 Bearer 的

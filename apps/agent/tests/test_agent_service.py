@@ -83,6 +83,7 @@ def test_agent_service_exchanges_token_and_isolates_history_by_user(
     settings = SimpleNamespace(
         skills_directory=_write_skill_library(tmp_path),
         m365_mcp_url="http://127.0.0.1:9999/mcp",
+        portkey_api_key=None,
     )
 
     class TokenAcquirer:
@@ -167,6 +168,7 @@ def test_agent_service_maps_obo_consent_error(tmp_path: Path) -> None:
     settings = SimpleNamespace(
         skills_directory=_write_skill_library(tmp_path),
         m365_mcp_url="http://127.0.0.1:9999/mcp",
+        portkey_api_key=None,
     )
 
     class FailingTokenAcquirer:

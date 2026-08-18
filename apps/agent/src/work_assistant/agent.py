@@ -75,7 +75,16 @@ class AgentService:
         @self._agent.toolset(per_run_step=False)
         def m365_tools(ctx: RunContext[AgentRunDependencies]) -> MCPToolset:
             """Give this run an MCP connection authenticated as its user."""
-            return MCPToolset(str(settings.m365_mcp_url), auth=ctx.deps.token_m)
+            headers = None
+            if settings.portkey_api_key is not None:
+                headers = {
+                    "x-portkey-api-key": settings.portkey_api_key.get_secret_value()
+                }
+            return MCPToolset(
+                str(settings.m365_mcp_url),
+                auth=ctx.deps.token_m,
+                headers=headers,
+            )
 
     async def chat(
         self,

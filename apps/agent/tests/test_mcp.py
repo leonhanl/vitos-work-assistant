@@ -5,8 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+from pydantic import SecretStr
 from pydantic_ai.models.test import TestModel
 from starlette.datastructures import Headers
 
@@ -20,8 +22,17 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def test_concurrent_users_send_their_own_mcp_audience_token(
+@pytest.mark.parametrize(
+    ("portkey_api_key", "expected_portkey_header"),
+    [
+        (None, None),
+        (SecretStr("test-portkey-key"), "test-portkey-key"),
+    ],
+)
+def test_mcp_requests_send_auth_and_optional_portkey_header(
     tmp_path: Path,
+    portkey_api_key: SecretStr | None,
+    expected_portkey_header: str | None,
 ) -> None:
     port = _free_port()
     endpoint = f"http://127.0.0.1:{port}/mcp"
@@ -31,6 +42,7 @@ def test_concurrent_users_send_their_own_mcp_audience_token(
         json_response=True,
     )
     seen_authorization: list[str | None] = []
+    seen_portkey_api_keys: list[str | None] = []
 
     class CaptureAuthorization:
         def __init__(self, app) -> None:
@@ -38,7 +50,9 @@ def test_concurrent_users_send_their_own_mcp_audience_token(
 
         async def __call__(self, scope, receive, send) -> None:
             if scope["type"] == "http" and scope["path"] == "/mcp":
-                seen_authorization.append(Headers(scope=scope).get("authorization"))
+                headers = Headers(scope=scope)
+                seen_authorization.append(headers.get("authorization"))
+                seen_portkey_api_keys.append(headers.get("x-portkey-api-key"))
             await self._app(scope, receive, send)
 
     @test_mcp.tool()
@@ -59,6 +73,7 @@ Use search_sharepoint.
     settings = SimpleNamespace(
         skills_directory=tmp_path,
         m365_mcp_url=endpoint,
+        portkey_api_key=portkey_api_key,
     )
 
     class TokenAcquirer:
@@ -109,3 +124,5 @@ Use search_sharepoint.
     assert set(seen_authorization) == allowed_headers
     assert seen_authorization.count("Bearer alice-token-m") >= 3
     assert seen_authorization.count("Bearer bob-token-m") >= 3
+    assert seen_portkey_api_keys
+    assert set(seen_portkey_api_keys) == {expected_portkey_header}

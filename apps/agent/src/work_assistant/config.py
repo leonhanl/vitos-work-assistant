@@ -40,6 +40,10 @@ class Settings(BaseSettings):
         validation_alias="ENTRA_REQUIRED_SCOPE",
     )
     m365_mcp_url: AnyHttpUrl = Field(validation_alias="M365_MCP_URL")
+    portkey_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="PORTKEY_API_KEY",
+    )
 
     @field_validator("llm_model", "skills_version", "entra_required_scope")
     @classmethod
@@ -70,6 +74,15 @@ class Settings(BaseSettings):
     @classmethod
     def secret_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value().strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("portkey_api_key")
+    @classmethod
+    def optional_secret_must_not_be_blank(
+        cls, value: SecretStr | None
+    ) -> SecretStr | None:
+        if value is not None and not value.get_secret_value().strip():
             raise ValueError("must not be blank")
         return value
 

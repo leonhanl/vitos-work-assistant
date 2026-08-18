@@ -72,6 +72,25 @@ def test_m365_streamable_http_endpoint_is_configurable(
     assert str(settings.m365_mcp_url) == "http://m365.internal:9000/custom-mcp"
 
 
+def test_portkey_api_key_is_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required_configuration(monkeypatch)
+    monkeypatch.delenv("PORTKEY_API_KEY", raising=False)
+
+    assert Settings().portkey_api_key is None
+
+
+def test_portkey_api_key_is_loaded_as_a_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_configuration(monkeypatch)
+    monkeypatch.setenv("PORTKEY_API_KEY", "test-portkey-key")
+
+    api_key = Settings().portkey_api_key
+
+    assert api_key is not None
+    assert api_key.get_secret_value() == "test-portkey-key"
+
+
 def test_skills_artifact_configuration_is_required(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
