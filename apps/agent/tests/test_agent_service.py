@@ -1,8 +1,10 @@
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
     ModelRequest,
@@ -192,3 +194,49 @@ def test_agent_service_maps_obo_consent_error(tmp_path: Path) -> None:
         assert exc.code == "m365_authorization_required"
     else:
         raise AssertionError("Expected AgentServiceError")
+
+
+def test_agent_service_logs_unexpected_error_with_traceback(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    settings = SimpleNamespace(
+        skills_directory=_write_skill_library(tmp_path),
+        m365_mcp_url="http://127.0.0.1:9999/mcp",
+        portkey_api_key=None,
+    )
+
+    class TokenAcquirer:
+        async def acquire_mcp_token(self, token_a: str) -> str:
+            return "token-m"
+
+    class FailingAgent:
+        async def run(self, *args: Any, **kwargs: Any) -> None:
+            raise RuntimeError("gateway rejected request")
+
+    service = AgentService(
+        settings,
+        TokenAcquirer(),
+        model=TestModel(custom_output_text="unused"),
+    )
+    service._agent = FailingAgent()  # type: ignore[assignment]
+    authenticated = AuthenticatedRequest(
+        user=CurrentUser(oid="alice", tid="tenant"),
+        token_a="token-a",
+    )
+
+    with caplog.at_level(logging.ERROR, logger="work_assistant.agent"):
+        with pytest.raises(AgentServiceError) as raised:
+            asyncio.run(service.chat("thread-1", "hello", authenticated))
+
+    assert raised.value.code == "agent_execution_failed"
+    record = next(
+        record
+        for record in caplog.records
+        if record.name == "work_assistant.agent"
+        and record.getMessage()
+        == "Agent execution failed type=RuntimeError thread_id=thread-1 user_oid=alice"
+    )
+    assert record.exc_info is not None
+    assert record.exc_info[0] is RuntimeError
+    assert "gateway rejected request" in caplog.text

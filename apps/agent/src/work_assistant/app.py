@@ -97,9 +97,11 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
                 extra={"thread_id": thread_id},
             )
             raise _http_error(exc) from None
-        except Exception:
-            logger.error(
-                "Chat request failed (unexpected service error)",
+        except Exception as exc:
+            logger.exception(
+                "Chat request failed type=%s thread_id=%s",
+                type(exc).__name__,
+                thread_id,
                 extra={"thread_id": thread_id},
             )
             raise _http_error(

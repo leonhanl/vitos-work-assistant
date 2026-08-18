@@ -1,3 +1,6 @@
+import logging
+
+import pytest
 from fastapi.testclient import TestClient
 
 from work_assistant.agent import AgentServiceError
@@ -107,3 +110,34 @@ def test_agent_error_becomes_sanitized_api_error() -> None:
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "m365_rate_limited"
+
+
+def test_unexpected_service_error_is_logged_with_traceback(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class FailingAgent:
+        async def chat(
+            self,
+            thread_id: str,
+            message: str,
+            authenticated: AuthenticatedRequest,
+        ) -> ChatResponse:
+            raise RuntimeError("unexpected service failure")
+
+    with caplog.at_level(logging.ERROR, logger="work_assistant.app"):
+        with TestClient(_create_test_app(FailingAgent())) as client:
+            response = client.post("/chat", json={"message": "find policy"})
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["code"] == "internal_error"
+    record = next(
+        record
+        for record in caplog.records
+        if record.name == "work_assistant.app"
+        and record.getMessage().startswith(
+            "Chat request failed type=RuntimeError thread_id="
+        )
+    )
+    assert record.exc_info is not None
+    assert record.exc_info[0] is RuntimeError
+    assert "unexpected service failure" in caplog.text

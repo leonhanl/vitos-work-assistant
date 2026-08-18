@@ -140,6 +140,16 @@ class AgentService:
         except AgentServiceError:
             raise
         except Exception as exc:
+            logger.exception(
+                "Agent execution failed type=%s thread_id=%s user_oid=%s",
+                type(exc).__name__,
+                thread_id,
+                authenticated.user.oid,
+                extra={
+                    "thread_id": thread_id,
+                    "user_oid": authenticated.user.oid,
+                },
+            )
             raise AgentServiceError(
                 502,
                 "agent_execution_failed",
