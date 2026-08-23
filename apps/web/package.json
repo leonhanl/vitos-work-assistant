@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ag-ui/client": "^0.0.58",
     "@azure/msal-browser": "^5.17.1"
   },
   "devDependencies": {

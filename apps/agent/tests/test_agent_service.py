@@ -15,7 +15,9 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.ui.ag_ui import AGUIAdapter
 from pydantic_ai_harness.skills import Skills
+from starlette.responses import Response
 
 from work_assistant.agent import AgentRunDependencies, AgentService, AgentServiceError
 from work_assistant.auth import AuthenticatedRequest, CurrentUser
@@ -40,6 +42,27 @@ Search internal material before answering.
     return root
 
 
+def _settings(tmp_path: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        skills_directory=_write_skill_library(tmp_path),
+        m365_mcp_url="http://127.0.0.1:9999/mcp",
+        jira_mcp_url="http://127.0.0.1:9998/mcp",
+        jira_service_desk_id="3",
+        portkey_api_key=None,
+    )
+
+
+def _authenticated() -> AuthenticatedRequest:
+    return AuthenticatedRequest(
+        user=CurrentUser(
+            oid="alice",
+            tid="tenant",
+            username="alice@example.com",
+        ),
+        token_a="alice-token-a",
+    )
+
+
 def test_skills_are_discovered_then_loaded_on_demand(tmp_path: Path) -> None:
     model_calls: list[tuple[list[Any], AgentInfo]] = []
 
@@ -47,12 +70,7 @@ def test_skills_are_discovered_then_loaded_on_demand(tmp_path: Path) -> None:
         model_calls.append((list(messages), info))
         if len(model_calls) == 1:
             return ModelResponse(
-                parts=[
-                    ToolCallPart(
-                        "load_capability",
-                        {"id": "test-skill"},
-                    )
-                ]
+                parts=[ToolCallPart("load_capability", {"id": "test-skill"})]
             )
         return ModelResponse(parts=[TextPart("done")])
 
@@ -79,155 +97,85 @@ def test_skills_are_discovered_then_loaded_on_demand(tmp_path: Path) -> None:
     assert result.output == "done"
 
 
-def test_agent_service_exchanges_token_and_isolates_history_by_user(
+def test_agent_service_exchanges_token_and_dispatches_with_per_run_dependencies(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = SimpleNamespace(
-        skills_directory=_write_skill_library(tmp_path),
-        m365_mcp_url="http://127.0.0.1:9999/mcp",
-        portkey_api_key=None,
-    )
-
     class TokenAcquirer:
         def __init__(self) -> None:
             self.seen: list[str] = []
 
         async def acquire_mcp_token(self, token_a: str) -> str:
             self.seen.append(token_a)
-            return token_a.replace("token-a", "token-m")
+            return "alice-token-m"
 
-    class FakeResult:
-        output = "current answer"
+    captured: dict[str, Any] = {}
 
-        def all_messages(self):
-            return [ModelRequest(parts=[])]
+    async def fake_dispatch(request, **kwargs):
+        captured.update(kwargs)
+        return Response("stream", media_type="text/event-stream")
 
-        def new_messages(self):
-            return [
-                ModelRequest(
-                    parts=[
-                        ToolReturnPart(
-                            "read_document",
-                            {
-                                "name": "VPN KB.docx",
-                                "web_url": "https://tenant.example/vpn",
-                            },
-                        )
-                    ]
-                )
-            ]
-
-    class FakeAgent:
-        def __init__(self) -> None:
-            self.calls: list[dict[str, Any]] = []
-
-        async def run(self, message: str, **kwargs: Any) -> FakeResult:
-            self.calls.append({"message": message, **kwargs})
-            return FakeResult()
-
+    monkeypatch.setattr(AGUIAdapter, "dispatch_request", fake_dispatch)
     token_acquirer = TokenAcquirer()
     service = AgentService(
-        settings,
+        _settings(tmp_path),
         token_acquirer,
         model=TestModel(custom_output_text="unused"),
     )
-    fake_agent = FakeAgent()
-    service._agent = fake_agent  # type: ignore[assignment]
 
-    alice = AuthenticatedRequest(
-        user=CurrentUser(oid="alice", tid="tenant"),
-        token_a="alice-token-a",
-    )
-    bob = AuthenticatedRequest(
-        user=CurrentUser(oid="bob", tid="tenant"),
-        token_a="bob-token-a",
-    )
+    response = asyncio.run(service.dispatch_chat(SimpleNamespace(), _authenticated()))
 
-    first = asyncio.run(service.chat("thread-1", "first", alice))
-    asyncio.run(service.chat("thread-1", "second", alice))
-    asyncio.run(service.chat("thread-1", "first", bob))
-
-    assert token_acquirer.seen == [
-        "alice-token-a",
-        "alice-token-a",
-        "bob-token-a",
-    ]
-    assert isinstance(fake_agent.calls[0]["deps"], AgentRunDependencies)
-    assert "alice-token-m" not in repr(fake_agent.calls[0]["deps"])
-    assert fake_agent.calls[0]["message_history"] is None
-    assert fake_agent.calls[1]["message_history"] is not None
-    assert fake_agent.calls[2]["message_history"] is None
-    assert first.model_dump() == {
-        "thread_id": "thread-1",
-        "answer": "current answer",
-        "sources": [
-            {"name": "VPN KB.docx", "url": "https://tenant.example/vpn"}
-        ],
-    }
+    assert response.body == b"stream"
+    assert token_acquirer.seen == ["alice-token-a"]
+    deps = captured["deps"]
+    assert isinstance(deps, AgentRunDependencies)
+    assert deps.jira_user_identifier == "alice@example.com"
+    assert deps.jira_service_desk_id == "3"
+    assert "alice-token-m" not in repr(deps)
+    assert captured["agent"] is service._agent
+    assert captured["on_complete"] == service._source_events
 
 
 def test_agent_service_maps_obo_consent_error(tmp_path: Path) -> None:
-    settings = SimpleNamespace(
-        skills_directory=_write_skill_library(tmp_path),
-        m365_mcp_url="http://127.0.0.1:9999/mcp",
-        portkey_api_key=None,
-    )
-
     class FailingTokenAcquirer:
         async def acquire_mcp_token(self, token_a: str) -> str:
             raise OboTokenError("obo_authorization_required")
 
     service = AgentService(
-        settings,
+        _settings(tmp_path),
         FailingTokenAcquirer(),
         model=TestModel(custom_output_text="unused"),
     )
-    authenticated = AuthenticatedRequest(
-        user=CurrentUser(oid="alice", tid="tenant"),
-        token_a="alice-token-a",
-    )
 
-    try:
-        asyncio.run(service.chat("thread-1", "hello", authenticated))
-    except AgentServiceError as exc:
-        assert exc.status_code == 403
-        assert exc.code == "m365_authorization_required"
-    else:
-        raise AssertionError("Expected AgentServiceError")
+    with pytest.raises(AgentServiceError) as raised:
+        asyncio.run(service.dispatch_chat(SimpleNamespace(), _authenticated()))
+
+    assert raised.value.status_code == 403
+    assert raised.value.code == "m365_authorization_required"
 
 
-def test_agent_service_logs_unexpected_error_with_traceback(
+def test_agent_service_logs_unexpected_dispatch_error_with_traceback(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    settings = SimpleNamespace(
-        skills_directory=_write_skill_library(tmp_path),
-        m365_mcp_url="http://127.0.0.1:9999/mcp",
-        portkey_api_key=None,
-    )
-
     class TokenAcquirer:
         async def acquire_mcp_token(self, token_a: str) -> str:
             return "token-m"
 
-    class FailingAgent:
-        async def run(self, *args: Any, **kwargs: Any) -> None:
-            raise RuntimeError("gateway rejected request")
+    async def failing_dispatch(request, **kwargs):
+        raise RuntimeError("gateway rejected request")
 
+    monkeypatch.setattr(AGUIAdapter, "dispatch_request", failing_dispatch)
     service = AgentService(
-        settings,
+        _settings(tmp_path),
         TokenAcquirer(),
         model=TestModel(custom_output_text="unused"),
-    )
-    service._agent = FailingAgent()  # type: ignore[assignment]
-    authenticated = AuthenticatedRequest(
-        user=CurrentUser(oid="alice", tid="tenant"),
-        token_a="token-a",
     )
 
     with caplog.at_level(logging.ERROR, logger="work_assistant.agent"):
         with pytest.raises(AgentServiceError) as raised:
-            asyncio.run(service.chat("thread-1", "hello", authenticated))
+            asyncio.run(service.dispatch_chat(SimpleNamespace(), _authenticated()))
 
     assert raised.value.code == "agent_execution_failed"
     record = next(
@@ -235,7 +183,7 @@ def test_agent_service_logs_unexpected_error_with_traceback(
         for record in caplog.records
         if record.name == "work_assistant.agent"
         and record.getMessage()
-        == "Agent execution failed type=RuntimeError thread_id=thread-1 user_oid=alice"
+        == "Agent dispatch failed type=RuntimeError user_oid=alice"
     )
     assert record.exc_info is not None
     assert record.exc_info[0] is RuntimeError

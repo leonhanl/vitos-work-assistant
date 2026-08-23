@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from typing import Protocol
-from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from starlette.responses import Response
 
 from work_assistant.agent import AgentService, AgentServiceError
 from work_assistant.auth import (
@@ -17,7 +17,6 @@ from work_assistant.auth import (
     get_current_user,
 )
 from work_assistant.config import Settings
-from work_assistant.models import ChatRequest, ChatResponse
 from work_assistant.obo import OboTokenService
 
 logging.basicConfig(
@@ -28,14 +27,13 @@ logger = logging.getLogger(__name__)
 
 
 class ChatService(Protocol):
-    """The one method FastAPI needs from the Agent service."""
+    """The methods FastAPI needs from the Agent service."""
 
-    async def chat(
+    async def dispatch_chat(
         self,
-        thread_id: str,
-        message: str,
+        request: Request,
         authenticated: AuthenticatedRequest,
-    ) -> ChatResponse: ...
+    ) -> Response: ...
 
 
 def create_app(chat_service: ChatService | None = None) -> FastAPI:
@@ -77,32 +75,24 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
     ) -> CurrentUser:
         return current_user
 
-    @application.post("/chat", response_model=ChatResponse)
+    @application.post("/chat")
     async def chat(
-        payload: ChatRequest,
         request: Request,
         authenticated: AuthenticatedRequest = Depends(get_authenticated_request),
-    ) -> ChatResponse:
-        thread_id = payload.thread_id or str(uuid4())
-        logger.info("Chat request started", extra={"thread_id": thread_id})
+    ) -> Response:
+        logger.info("Chat request started")
         service: ChatService = request.app.state.chat_service
         try:
-            response = await service.chat(thread_id, payload.message, authenticated)
-            logger.info("Chat request succeeded", extra={"thread_id": thread_id})
+            response = await service.dispatch_chat(request, authenticated)
+            logger.info("Chat request dispatched")
             return response
         except AgentServiceError as exc:
-            logger.warning(
-                "Chat request failed (%s)",
-                exc.code,
-                extra={"thread_id": thread_id},
-            )
+            logger.warning("Chat request failed (%s)", exc.code)
             raise _http_error(exc) from None
         except Exception as exc:
             logger.exception(
-                "Chat request failed type=%s thread_id=%s",
+                "Chat request failed type=%s",
                 type(exc).__name__,
-                thread_id,
-                extra={"thread_id": thread_id},
             )
             raise _http_error(
                 AgentServiceError(

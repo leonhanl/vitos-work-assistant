@@ -55,8 +55,8 @@ trimming。由于受保护的 MCP 在 `initialize` 和 `tools/list` 阶段就要
 都会先获取 Token M；只有模型实际调用 M365 工具时，MCP 才继续获取 Token G。Token A、
 Token M、Token G 都不会进入 prompt、对话历史、工具参数或日志。
 
-Agent 进程只创建一个共享的 Pydantic AI `Agent`；用户状态不放在 Agent 对象里，而是用
-`(tid, oid, thread_id)` 索引独立的内存消息历史。Skills 作为独立、版本化 artifact 通过
+Agent 进程只创建一个共享的 Pydantic AI `Agent`；对话消息由 AG-UI 客户端按 thread
+持有并在每次 run 中提交，不在共享 Agent 对象里保存用户状态。Skills 作为独立、版本化 artifact 通过
 `SKILLS_DIRECTORY` 注入；目录下每个子目录中的 `SKILL.md` 会在启动时被发现，模型最初
 只看到 skill 的名称和描述，调用 `load_capability` 后才加载完整正文。Agent 启动时会校验
 artifact，并记录 `SKILLS_VERSION`；修改或切换 artifact 后需要重启 Agent 进程。
@@ -73,10 +73,11 @@ vitos-work-assistant/
 │   ├── web/                  # Vite + Vanilla JS + MSAL Browser
 │   └── agent/                # FastAPI + Token A validation + Pydantic AI
 └── services/
-    └── salesforce-mcp-http/  # 占位；即将实现
+    ├── jira-mcp-http/         # Jira MCP HTTP service 配置与启动文档
+    └── salesforce-mcp-http/   # 占位；即将实现
 ```
 
-API contract 保持不变：
+API endpoints：
 
 ```http
 GET  /health    anonymous
@@ -84,24 +85,26 @@ GET  /me        Bearer Token A required
 POST /chat      Bearer Token A required
 ```
 
-`POST /chat` request：
+`POST /chat` 使用 AG-UI 协议。Web 通过 `@ag-ui/client` 发送包含 thread、run 和完整消息
+上下文的 `RunAgentInput`，后端返回 `text/event-stream`。例如首轮请求的核心字段为：
 
 ```json
 {
-  "message": "How do I connect to VPN?",
-  "thread_id": "optional-page-local-thread-id"
+  "threadId": "page-local-thread-id",
+  "runId": "unique-run-id",
+  "state": {},
+  "messages": [
+    {"id": "message-id", "role": "user", "content": "How do I connect to VPN?"}
+  ],
+  "tools": [],
+  "context": [],
+  "forwardedProps": {}
 }
 ```
 
-response：
-
-```json
-{
-  "thread_id": "...",
-  "answer": "...",
-  "sources": [{ "name": "KB003 - Corporate VPN", "url": "https://..." }]
-}
-```
+普通回答以 AG-UI text message events 流式返回；实际读取的文档以 `sources` custom event
+返回。需要确认的 Jira 创建操作由 Pydantic AI 转成 AG-UI interrupt，客户端用下一次
+run 的 `resume` 字段批准或拒绝，不存在项目自定义的 action endpoint。
 
 ## 1. 手工配置 Microsoft Entra
 
@@ -422,8 +425,9 @@ Python 中 list 和 tuple 有什么区别？
 ```
 
 前端在每次 API call 前运行 `acquireTokenSilent`，必要时才 fallback 到
-`acquireTokenRedirect`，然后用 Token A 调用 `POST /api/chat`。页面显示 answer 与后端
-实际返回的 sources，不解析 JWT、不自行刷新或长期保存 access token。
+`acquireTokenRedirect`，然后由 AG-UI HTTP client 用 Token A 调用 `POST /api/chat`。
+页面消费流式回答、sources custom event 和 approval interrupt，不解析 JWT、不自行刷新
+或长期保存 access token。
 
 再输入：
 
@@ -456,17 +460,17 @@ python -m pytest apps/agent/tests
 
 后端认证测试使用本地 RSA signing key，不访问真实 Entra、JWKS、Graph 或 LLM，覆盖
 匿名 health、缺 token、无效 token、错误 audience / issuer / tenant、缺 scope，以及
-有效 Alice/Bob identity。Agent 测试还覆盖 Skill 正文的按需加载、OBO scope、用户历史
-隔离，以及 Alice/Bob 并发运行时各自的 Token M 确实进入真实本地 Streamable HTTP MCP
-请求。它们不会验证真实 tenant 的 admin consent、Conditional Access 或 SharePoint ACL。
+有效 Alice/Bob identity。Agent 测试还覆盖 Skill 正文的按需加载、AG-UI dispatch、Jira
+创建审批、可信参数覆盖，以及 Alice/Bob 并发运行时各自的 Token M 确实进入真实本地
+Streamable HTTP MCP 请求。它们不会验证真实 tenant 的 admin consent、Conditional
+Access 或 SharePoint ACL。
 MCP Server 自身的认证、Graph、文档解析和端到端测试由独立的
 [`vitos-m365-mcp`](https://github.com/leonhanl/vitos-m365-mcp#readme) 仓库运行。
 
 ## 已知限制与下一阶段
 
-当前对话历史只保存在 Agent 进程内存中，进程重启后会丢失。内部 key 已绑定
-`(tid, oid, thread_id)`，同一 thread 的并发请求会串行执行；持久化 memory 和 conversation
-生命周期留给后续阶段。
+当前对话历史只保存在浏览器页面内存中，刷新页面后会丢失。服务端持久化 memory、跨设备
+conversation 生命周期以及多实例恢复留给后续阶段。
 
 本 MVP 使用 client secret，生产部署应改用 certificate 或托管的 secret store。当前没有
 实现完整的 Conditional Access / CAE claims-challenge 往返；需要额外交互的 OBO 请求会

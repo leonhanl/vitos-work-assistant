@@ -7,11 +7,11 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
+from starlette.responses import JSONResponse
 
 import work_assistant.auth as auth_module
 from work_assistant.app import create_app
 from work_assistant.auth import EntraTokenValidator, ValidationContext
-from work_assistant.models import ChatResponse
 
 TENANT_ID = "11111111-1111-1111-1111-111111111111"
 API_CLIENT_ID = "22222222-2222-2222-2222-222222222222"
@@ -20,8 +20,9 @@ GRAPH_AUDIENCE = "00000003-0000-0000-c000-000000000000"
 
 
 class FakeAgent:
-    async def chat(self, thread_id: str, message: str, authenticated) -> ChatResponse:
-        return ChatResponse(thread_id=thread_id, answer=f"answer: {message}")
+    async def dispatch_chat(self, request, authenticated):
+        body = await request.json()
+        return JSONResponse({"threadId": body["threadId"]})
 
 
 class StaticKeyValidator(EntraTokenValidator):
@@ -193,7 +194,17 @@ def test_valid_user_can_call_me_and_chat(
         chat_response = client.post(
             "/chat",
             headers=headers,
-            json={"message": "hello"},
+            json={
+                "threadId": "thread-1",
+                "runId": "run-1",
+                "state": {},
+                "messages": [
+                    {"id": "message-1", "role": "user", "content": "hello"}
+                ],
+                "tools": [],
+                "context": [],
+                "forwardedProps": {},
+            },
         )
 
     assert me_response.status_code == 200
@@ -203,4 +214,4 @@ def test_valid_user_can_call_me_and_chat(
         "username": username,
     }
     assert chat_response.status_code == 200
-    assert chat_response.json()["answer"] == "answer: hello"
+    assert chat_response.json()["threadId"] == "thread-1"

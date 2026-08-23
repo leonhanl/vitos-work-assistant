@@ -2,6 +2,8 @@ import logging
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from work_assistant.agent import AgentServiceError
 from work_assistant.app import ChatService, create_app
@@ -10,20 +12,20 @@ from work_assistant.auth import (
     CurrentUser,
     get_authenticated_request,
 )
-from work_assistant.models import ChatResponse, Source
 
 
 class FakeAgent:
-    async def chat(
+    async def dispatch_chat(
         self,
-        thread_id: str,
-        message: str,
+        request: Request,
         authenticated: AuthenticatedRequest,
-    ) -> ChatResponse:
-        return ChatResponse(
-            thread_id=thread_id,
-            answer=f"answer: {message}",
-            sources=[Source(name="KB.docx", url="https://tenant.example/kb")],
+    ) -> Response:
+        body = await request.json()
+        return JSONResponse(
+            {
+                "threadId": body["threadId"],
+                "username": authenticated.user.username,
+            }
         )
 
 
@@ -46,6 +48,18 @@ def _create_test_app(chat_service: ChatService | None = None):
     return application
 
 
+def _ag_ui_input() -> dict:
+    return {
+        "threadId": "thread-1",
+        "runId": "run-1",
+        "state": {},
+        "messages": [{"id": "message-1", "role": "user", "content": "hello"}],
+        "tools": [],
+        "context": [],
+        "forwardedProps": {},
+    }
+
+
 def test_health() -> None:
     with TestClient(create_app(FakeAgent())) as client:
         assert client.get("/health").json() == {"status": "ok"}
@@ -53,7 +67,7 @@ def test_health() -> None:
 
 def test_chat_requires_bearer_token() -> None:
     with TestClient(create_app(FakeAgent())) as client:
-        response = client.post("/chat", json={"message": "hello"})
+        response = client.post("/chat", json=_ag_ui_input())
 
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
@@ -71,34 +85,34 @@ def test_me_returns_authenticated_identity() -> None:
     }
 
 
-def test_chat_uses_mocked_agent_and_generates_thread_id() -> None:
+def test_chat_passes_ag_ui_request_and_authenticated_user_to_service() -> None:
     with TestClient(_create_test_app()) as client:
-        response = client.post("/chat", json={"message": "hello"})
+        response = client.post("/chat", json=_ag_ui_input())
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["thread_id"]
-    assert body["answer"] == "answer: hello"
-    assert body["sources"] == [
-        {"name": "KB.docx", "url": "https://tenant.example/kb"}
-    ]
+    assert response.json() == {
+        "threadId": "thread-1",
+        "username": "alice@example.com",
+    }
 
 
-def test_chat_request_validation() -> None:
+def test_custom_action_endpoint_has_been_removed() -> None:
     with TestClient(_create_test_app()) as client:
-        response = client.post("/chat", json={"message": "   "})
+        response = client.post(
+            "/chat/actions/action-1/decision",
+            json={"thread_id": "thread-1", "decision": "approve"},
+        )
 
-    assert response.status_code == 422
+    assert response.status_code == 404
 
 
 def test_agent_error_becomes_sanitized_api_error() -> None:
     class FailingAgent:
-        async def chat(
+        async def dispatch_chat(
             self,
-            thread_id: str,
-            message: str,
+            request: Request,
             authenticated: AuthenticatedRequest,
-        ) -> ChatResponse:
+        ) -> Response:
             raise AgentServiceError(
                 503,
                 "m365_rate_limited",
@@ -106,7 +120,7 @@ def test_agent_error_becomes_sanitized_api_error() -> None:
             )
 
     with TestClient(_create_test_app(FailingAgent())) as client:
-        response = client.post("/chat", json={"message": "find policy"})
+        response = client.post("/chat", json=_ag_ui_input())
 
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "m365_rate_limited"
@@ -116,17 +130,16 @@ def test_unexpected_service_error_is_logged_with_traceback(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     class FailingAgent:
-        async def chat(
+        async def dispatch_chat(
             self,
-            thread_id: str,
-            message: str,
+            request: Request,
             authenticated: AuthenticatedRequest,
-        ) -> ChatResponse:
+        ) -> Response:
             raise RuntimeError("unexpected service failure")
 
     with caplog.at_level(logging.ERROR, logger="work_assistant.app"):
         with TestClient(_create_test_app(FailingAgent())) as client:
-            response = client.post("/chat", json={"message": "find policy"})
+            response = client.post("/chat", json=_ag_ui_input())
 
     assert response.status_code == 500
     assert response.json()["detail"]["code"] == "internal_error"
@@ -134,9 +147,7 @@ def test_unexpected_service_error_is_logged_with_traceback(
         record
         for record in caplog.records
         if record.name == "work_assistant.app"
-        and record.getMessage().startswith(
-            "Chat request failed type=RuntimeError thread_id="
-        )
+        and record.getMessage() == "Chat request failed type=RuntimeError"
     )
     assert record.exc_info is not None
     assert record.exc_info[0] is RuntimeError

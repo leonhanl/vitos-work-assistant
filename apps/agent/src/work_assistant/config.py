@@ -40,17 +40,31 @@ class Settings(BaseSettings):
         validation_alias="ENTRA_REQUIRED_SCOPE",
     )
     m365_mcp_url: AnyHttpUrl = Field(validation_alias="M365_MCP_URL")
+    jira_mcp_url: AnyHttpUrl = Field(validation_alias="JIRA_MCP_URL")
+    jira_service_desk_id: str = Field(validation_alias="JIRA_SERVICE_DESK_ID")
     portkey_api_key: SecretStr | None = Field(
         default=None,
         validation_alias="PORTKEY_API_KEY",
     )
 
-    @field_validator("llm_model", "skills_version", "entra_required_scope")
+    @field_validator(
+        "llm_model",
+        "skills_version",
+        "entra_required_scope",
+        "jira_service_desk_id",
+    )
     @classmethod
     def must_not_be_blank(cls, value: str) -> str:
         value = value.strip()
         if not value:
             raise ValueError("must not be blank")
+        return value
+
+    @field_validator("jira_service_desk_id")
+    @classmethod
+    def jira_service_desk_id_must_be_positive(cls, value: str) -> str:
+        if not value.isdigit() or int(value) < 1:
+            raise ValueError("must be a positive numeric service desk ID")
         return value
 
     @field_validator("entra_required_scope")

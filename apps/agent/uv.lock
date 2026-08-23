@@ -10,6 +10,18 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "ag-ui-protocol"
+version = "0.1.20"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e4/7a/0db4c6233ccf39654e45af0e532efa87abc0eb7828b16f9e63014881e75f/ag_ui_protocol-0.1.20.tar.gz", hash = "sha256:fadc9600f492a9dde8b2b027171bb471a899430e53291a0b882a09d3f5416145", size = 11977, upload-time = "2026-08-14T22:34:36.694Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/57/55a4a74a5580ef74d2e326f455be45256d4f11260b493174ae0a81626be4/ag_ui_protocol-0.1.20-py3-none-any.whl", hash = "sha256:a15cced52603327b0ba32e95a8aca87e9067f3e69281addfc3fecdaa16a1d485", size = 15142, upload-time = "2026-08-14T22:34:35.607Z" },
+]
+
+[[package]]
 name = "aiofile"
 version = "3.12.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1034,6 +1046,10 @@ wheels = [
 ]
 
 [package.optional-dependencies]
+ag-ui = [
+    { name = "ag-ui-protocol" },
+    { name = "starlette" },
+]
 mcp = [
     { name = "fastmcp-slim", extra = ["client"] },
 ]
@@ -1761,7 +1777,7 @@ dependencies = [
     { name = "httpx" },
     { name = "msal" },
     { name = "pydantic-ai-harness", extra = ["skills"] },
-    { name = "pydantic-ai-slim", extra = ["mcp", "openai"] },
+    { name = "pydantic-ai-slim", extra = ["ag-ui", "mcp", "openai"] },
     { name = "pydantic-settings" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "uvicorn" },
@@ -1778,7 +1794,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28,<1" },
     { name = "msal", specifier = ">=1.34,<2" },
     { name = "pydantic-ai-harness", extras = ["skills"], specifier = ">=0.13,<0.14" },
-    { name = "pydantic-ai-slim", extras = ["mcp", "openai"], specifier = ">=2.31,<3" },
+    { name = "pydantic-ai-slim", extras = ["ag-ui", "mcp", "openai"], specifier = ">=2.31,<3" },
     { name = "pydantic-settings", specifier = ">=2.10,<3" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.10,<3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8,<10" },

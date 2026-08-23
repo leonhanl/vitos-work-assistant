@@ -22,6 +22,8 @@ def _set_required_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENTRA_WORK_ASSISTANT_API_CLIENT_ID", API_CLIENT_ID)
     monkeypatch.setenv("ENTRA_WORK_ASSISTANT_API_CLIENT_SECRET", "test-secret")
     monkeypatch.setenv("M365_MCP_URL", "http://127.0.0.1:8001/mcp")
+    monkeypatch.setenv("JIRA_MCP_URL", "http://127.0.0.1:9000/mcp")
+    monkeypatch.setenv("JIRA_SERVICE_DESK_ID", "3")
     monkeypatch.setenv("ENTRA_MCP_CLIENT_ID", MCP_CLIENT_ID)
 
 
@@ -47,6 +49,8 @@ def test_llm_configuration_accepts_openai_compatible_endpoint(
     assert settings.llm_api_key.get_secret_value() == "test-key"
     assert str(settings.llm_base_url).startswith("https://provider.example/v1")
     assert str(settings.m365_mcp_url) == "http://127.0.0.1:8001/mcp"
+    assert str(settings.jira_mcp_url) == "http://127.0.0.1:9000/mcp"
+    assert settings.jira_service_desk_id == "3"
     assert str(settings.entra_tenant_id) == TENANT_ID
     assert str(settings.entra_work_assistant_api_client_id) == API_CLIENT_ID
     assert (
@@ -118,6 +122,27 @@ def test_m365_streamable_http_endpoint_is_required(
 ) -> None:
     _set_required_configuration(monkeypatch)
     monkeypatch.delenv("M365_MCP_URL")
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_jira_configuration_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_required_configuration(monkeypatch)
+    monkeypatch.delenv("JIRA_MCP_URL")
+    monkeypatch.delenv("JIRA_SERVICE_DESK_ID")
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+@pytest.mark.parametrize("service_desk_id", ["", "0", "-1", "desk-3"])
+def test_jira_service_desk_id_must_be_positive_numeric(
+    monkeypatch: pytest.MonkeyPatch,
+    service_desk_id: str,
+) -> None:
+    _set_required_configuration(monkeypatch)
+    monkeypatch.setenv("JIRA_SERVICE_DESK_ID", service_desk_id)
 
     with pytest.raises(ValidationError):
         Settings()
