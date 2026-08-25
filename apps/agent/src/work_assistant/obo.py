@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Protocol
 
 import anyio
+import jwt
 import msal
+from jwt.exceptions import PyJWTError
 
 from work_assistant.config import Settings
 
@@ -37,6 +40,7 @@ class OboTokenService:
             settings.entra_work_assistant_api_client_secret.get_secret_value()
         )
         self._scope = settings.mcp_scope
+        self._log_token_claims = settings.entra_log_mcp_token_claims
 
     async def acquire_mcp_token(self, token_a: str) -> str:
         if not token_a.strip():
@@ -53,6 +57,7 @@ class OboTokenService:
 
         access_token = result.get("access_token") if isinstance(result, dict) else None
         if isinstance(access_token, str) and access_token.strip():
+            self._log_unverified_token_claims(access_token)
             return access_token
 
         error_code = result.get("error") if isinstance(result, dict) else None
@@ -62,6 +67,26 @@ class OboTokenService:
             safe_code = "obo_token_exchange_failed"
         logger.warning("MCP OBO token exchange failed code=%s", safe_code)
         raise OboTokenError(safe_code)
+
+    def _log_unverified_token_claims(self, token: str) -> None:
+        """Decode Token M for explicitly enabled local troubleshooting only."""
+        if not self._log_token_claims:
+            return
+
+        try:
+            header = jwt.get_unverified_header(token)
+            claims = jwt.decode(token, options={"verify_signature": False})
+        except PyJWTError:
+            logger.warning(
+                "MCP Token M troubleshooting decode failed; raw token omitted"
+            )
+            return
+
+        logger.info(
+            "MCP Token M unverified diagnostic header=%s claims=%s",
+            json.dumps(header, separators=(",", ":"), sort_keys=True),
+            json.dumps(claims, separators=(",", ":"), sort_keys=True),
+        )
 
     def _acquire_mcp_token_sync(self, token_a: str) -> dict[str, object]:
         """Use the Agent API's confidential identity for the OBO exchange."""

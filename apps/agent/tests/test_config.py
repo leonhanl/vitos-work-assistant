@@ -58,6 +58,7 @@ def test_llm_configuration_accepts_openai_compatible_endpoint(
         == "test-secret"
     )
     assert settings.entra_required_scope == "access_as_user"
+    assert settings.entra_log_mcp_token_claims is False
     assert settings.mcp_scope == f"api://{MCP_CLIENT_ID}/access_as_user"
 
     model = create_chat_model_client(settings)
@@ -158,6 +159,15 @@ def test_mcp_scope_can_override_the_default_application_id_uri(
     )
 
     assert Settings().mcp_scope == "api://m365.internal/access_as_user"
+
+
+def test_mcp_token_claim_logging_can_be_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_configuration(monkeypatch)
+    monkeypatch.setenv("ENTRA_LOG_MCP_TOKEN_CLAIMS", "true")
+
+    assert Settings().entra_log_mcp_token_claims is True
 
 
 def test_gpt_5_6_uses_chat_completions_compatible_reasoning_effort(

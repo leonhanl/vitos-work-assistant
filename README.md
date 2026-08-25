@@ -440,6 +440,20 @@ Pydantic AI 以 Token M 初始化 MCP → MCP 在工具调用时 OBO 获取 Alic
 Alice。SharePoint ACL 应是 Alice 自己的 ACL。普通 Python 问题也会为 MCP 初始化获取
 Token M，但不会触发 MCP → Graph 的第二段 OBO。
 
+### 临时查看 Token M claims
+
+仅在本地 troubleshooting 时，可以在 `apps/agent/.env` 中临时设置：
+
+```text
+ENTRA_LOG_MCP_TOKEN_CLAIMS=true
+```
+
+重启 Agent 后发起一次 `/chat`，Agent 日志会输出 Token M 的 decoded JWT header 和
+claims，例如 `aud`、`azp`、`oid`、`tid`、`scp`、`iat`、`nbf` 与 `exp`。该功能不会输出
+原始 token 或 signature，输出内容仅为未验签的诊断视图，不能代替 MCP Server 的完整
+token validation。Claims 仍包含用户身份信息，因此不要在生产环境启用，也不要把日志发送
+到不受信任的位置；排查完成后立即恢复为 `false` 并重启 Agent。
+
 ### Bob 与 Sign out
 
 1. 点击 **Sign out**；页面调用 MSAL `logoutRedirect`，清理 MSAL account/token cache

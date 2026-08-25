@@ -35,6 +35,10 @@ class Settings(BaseSettings):
         default=None,
         validation_alias="ENTRA_MCP_SCOPE",
     )
+    entra_log_mcp_token_claims: bool = Field(
+        default=False,
+        validation_alias="ENTRA_LOG_MCP_TOKEN_CLAIMS",
+    )
     entra_required_scope: str = Field(
         default="access_as_user",
         validation_alias="ENTRA_REQUIRED_SCOPE",
