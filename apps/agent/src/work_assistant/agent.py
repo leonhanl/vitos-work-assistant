@@ -191,6 +191,11 @@ class AgentService:
     ) -> None:
         self._token_acquirer = token_acquirer
         self._jira_service_desk_id = settings.jira_service_desk_id
+        mcp_headers = None
+        if settings.portkey_api_key is not None:
+            mcp_headers = {
+                "x-portkey-api-key": settings.portkey_api_key.get_secret_value()
+            }
         self._agent = Agent(
             model or create_chat_model_client(settings),
             deps_type=AgentRunDependencies,
@@ -202,15 +207,10 @@ class AgentService:
         @self._agent.toolset(per_run_step=False)
         def m365_tools(ctx: RunContext[AgentRunDependencies]) -> MCPToolset:
             """Give this run an M365 MCP connection authenticated as its user."""
-            headers = None
-            if settings.portkey_api_key is not None:
-                headers = {
-                    "x-portkey-api-key": settings.portkey_api_key.get_secret_value()
-                }
             return MCPToolset(
                 str(settings.m365_mcp_url),
                 auth=ctx.deps.token_m,
-                headers=headers,
+                headers=mcp_headers,
             )
 
         @self._agent.toolset(per_run_step=False)
@@ -221,6 +221,7 @@ class AgentService:
             base_toolset = MCPToolset(
                 str(settings.jira_mcp_url),
                 id="jira-service-desk",
+                headers=mcp_headers,
                 max_retries=0,
                 tool_error_behavior="error",
                 process_tool_call=_process_jira_tool_call,

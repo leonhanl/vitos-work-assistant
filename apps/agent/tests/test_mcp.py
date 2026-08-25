@@ -188,7 +188,7 @@ def test_m365_and_jira_mcp_use_their_distinct_authentication_models(
     assert captured_jira.authorization
     assert set(captured_jira.authorization) == {None}
     assert set(captured_m365.portkey_api_keys) == {expected_portkey_header}
-    assert set(captured_jira.portkey_api_keys) == {None}
+    assert set(captured_jira.portkey_api_keys) == {expected_portkey_header}
 
 
 def test_jira_create_requires_approval_and_forces_trusted_arguments(
