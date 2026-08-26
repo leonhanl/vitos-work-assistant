@@ -44,12 +44,16 @@ class CaptureHeaders:
         self._app = app
         self.authorization: list[str | None] = []
         self.portkey_api_keys: list[str | None] = []
+        self.portkey_trace_ids: list[str | None] = []
+        self.portkey_metadata: list[str | None] = []
 
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] == "http" and scope["path"] == "/mcp":
             headers = Headers(scope=scope)
             self.authorization.append(headers.get("authorization"))
             self.portkey_api_keys.append(headers.get("x-portkey-api-key"))
+            self.portkey_trace_ids.append(headers.get("x-portkey-trace-id"))
+            self.portkey_metadata.append(headers.get("x-portkey-metadata"))
         await self._app(scope, receive, send)
 
 
@@ -180,6 +184,23 @@ def test_m365_and_jira_mcp_use_their_distinct_authentication_models(
     assert set(captured_jira.authorization) == {None}
     assert set(captured_m365.portkey_api_keys) == {"test-portkey-key"}
     assert set(captured_jira.portkey_api_keys) == {"test-portkey-key"}
+    assert None not in captured_m365.portkey_trace_ids
+    assert set(captured_m365.portkey_trace_ids) == set(captured_jira.portkey_trace_ids)
+    assert len(set(captured_m365.portkey_trace_ids)) == 2
+    m365_metadata = {
+        json.dumps(json.loads(value), sort_keys=True)
+        for value in captured_m365.portkey_metadata
+        if value is not None
+    }
+    jira_metadata = {
+        json.dumps(json.loads(value), sort_keys=True)
+        for value in captured_jira.portkey_metadata
+        if value is not None
+    }
+    assert m365_metadata == jira_metadata
+    assert {
+        json.loads(value)["_user"] for value in m365_metadata
+    } == {"alice@example.com", "bob@example.com"}
 
 
 def test_jira_create_requires_approval_and_forces_trusted_arguments(

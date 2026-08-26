@@ -76,10 +76,10 @@ class AgentRunDependencies:
     jira_service_desk_id: str
 
 
-def _portkey_model_settings(
+def _portkey_observability_headers(
     ctx: RunContext[AgentRunDependencies],
-) -> ModelSettings:
-    """Attach stable user, session, and run identifiers to every model request."""
+) -> dict[str, str]:
+    """Build the Portkey identifiers shared by LLM and MCP requests."""
     session_id = sha256(
         f"{ctx.deps.user_oid}\0{ctx.conversation_id}".encode()
     ).hexdigest()
@@ -88,15 +88,22 @@ def _portkey_model_settings(
         "user_oid": ctx.deps.user_oid,
         "session_id": session_id,
     }
+    return {
+        "x-portkey-trace-id": ctx.run_id,
+        "x-portkey-metadata": json.dumps(
+            metadata,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    }
+
+
+def _portkey_model_settings(
+    ctx: RunContext[AgentRunDependencies],
+) -> ModelSettings:
+    """Attach Portkey observability headers to every model request."""
     return ModelSettings(
-        extra_headers={
-            "x-portkey-trace-id": ctx.run_id,
-            "x-portkey-metadata": json.dumps(
-                metadata,
-                separators=(",", ":"),
-                sort_keys=True,
-            ),
-        }
+        extra_headers=_portkey_observability_headers(ctx),
     )
 
 
@@ -218,9 +225,7 @@ class AgentService:
     ) -> None:
         self._token_acquirer = token_acquirer
         self._jira_service_desk_id = settings.jira_service_desk_id
-        mcp_headers = {
-            "x-portkey-api-key": settings.portkey_api_key.get_secret_value()
-        }
+        portkey_api_key = settings.portkey_api_key.get_secret_value()
         self._agent = Agent(
             model or create_chat_model_client(settings),
             deps_type=AgentRunDependencies,
@@ -236,7 +241,10 @@ class AgentService:
             return MCPToolset(
                 str(settings.m365_mcp_url),
                 auth=ctx.deps.token_m,
-                headers=mcp_headers,
+                headers={
+                    "x-portkey-api-key": portkey_api_key,
+                    **_portkey_observability_headers(ctx),
+                },
             )
 
         @self._agent.toolset(per_run_step=False)
@@ -247,7 +255,10 @@ class AgentService:
             base_toolset = MCPToolset(
                 str(settings.jira_mcp_url),
                 id="jira-service-desk",
-                headers=mcp_headers,
+                headers={
+                    "x-portkey-api-key": portkey_api_key,
+                    **_portkey_observability_headers(ctx),
+                },
                 max_retries=0,
                 tool_error_behavior="error",
                 process_tool_call=_process_jira_tool_call,
