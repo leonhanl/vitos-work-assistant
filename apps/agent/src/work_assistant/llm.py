@@ -7,7 +7,7 @@ from work_assistant.config import Settings
 
 
 def create_chat_model_client(settings: Settings) -> OpenAIChatModel:
-    """Create the PydanticAI model used by the shared Agent."""
+    """Create the PydanticAI model routed through the Portkey gateway."""
     model_settings = OpenAIChatModelSettings(timeout=60.0)
     if _is_gpt_5_6(settings.llm_model):
         # GPT-5.6 defaults to reasoning effort "medium", while its Chat
@@ -16,8 +16,8 @@ def create_chat_model_client(settings: Settings) -> OpenAIChatModel:
         model_settings["openai_reasoning_effort"] = "none"
 
     provider = OpenAIProvider(
-        api_key=settings.llm_api_key.get_secret_value(),
-        base_url=str(settings.llm_base_url),
+        api_key=settings.portkey_api_key.get_secret_value(),
+        base_url=str(settings.portkey_base_url),
     )
     return OpenAIChatModel(
         settings.llm_model,

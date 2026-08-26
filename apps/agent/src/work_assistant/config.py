@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Small, provider-neutral configuration surface."""
+    """Small configuration surface for the Portkey-backed Agent."""
 
     model_config = SettingsConfigDict(
         case_sensitive=True,
@@ -18,8 +18,8 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    llm_base_url: AnyHttpUrl = Field(validation_alias="LLM_BASE_URL")
-    llm_api_key: SecretStr = Field(validation_alias="LLM_API_KEY")
+    portkey_base_url: AnyHttpUrl = Field(validation_alias="PORTKEY_BASE_URL")
+    portkey_api_key: SecretStr = Field(validation_alias="PORTKEY_API_KEY")
     llm_model: str = Field(validation_alias="LLM_MODEL")
     skills_directory: Path = Field(validation_alias="SKILLS_DIRECTORY")
     skills_version: str = Field(validation_alias="SKILLS_VERSION")
@@ -46,11 +46,6 @@ class Settings(BaseSettings):
     m365_mcp_url: AnyHttpUrl = Field(validation_alias="M365_MCP_URL")
     jira_mcp_url: AnyHttpUrl = Field(validation_alias="JIRA_MCP_URL")
     jira_service_desk_id: str = Field(validation_alias="JIRA_SERVICE_DESK_ID")
-    portkey_api_key: SecretStr | None = Field(
-        default=None,
-        validation_alias="PORTKEY_API_KEY",
-    )
-
     @field_validator(
         "llm_model",
         "skills_version",
@@ -88,19 +83,10 @@ class Settings(BaseSettings):
             raise ValueError("must contain exactly one scope value")
         return value
 
-    @field_validator("llm_api_key", "entra_work_assistant_api_client_secret")
+    @field_validator("portkey_api_key", "entra_work_assistant_api_client_secret")
     @classmethod
     def secret_must_not_be_blank(cls, value: SecretStr) -> SecretStr:
         if not value.get_secret_value().strip():
-            raise ValueError("must not be blank")
-        return value
-
-    @field_validator("portkey_api_key")
-    @classmethod
-    def optional_secret_must_not_be_blank(
-        cls, value: SecretStr | None
-    ) -> SecretStr | None:
-        if value is not None and not value.get_secret_value().strip():
             raise ValueError("must not be blank")
         return value
 

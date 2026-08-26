@@ -274,8 +274,8 @@ uvicorn work_assistant.app:app --reload --host 127.0.0.1 --port 8000
 关键值：
 
 ```dotenv
-LLM_BASE_URL=https://api.openai.com/v1
-LLM_API_KEY=<secret>
+PORTKEY_BASE_URL=https://api.portkey.ai/v1
+PORTKEY_API_KEY=<Work Assistant service API key>
 LLM_MODEL=<tool-calling model>
 SKILLS_DIRECTORY=/absolute/path/to/work-assistant-skills
 SKILLS_VERSION=<immutable artifact version>
@@ -288,9 +288,14 @@ M365_MCP_URL=http://127.0.0.1:8001/mcp
 ENTRA_MCP_CLIENT_ID=<vitos-m365-mcp Application client ID>
 # 仅当 MCP 使用自定义 Application ID URI 时设置：
 # ENTRA_MCP_SCOPE=api://mcp.internal.example/access_as_user
-# 可选；配置后作为 x-portkey-api-key 发送给 vitos-m365-mcp：
-# PORTKEY_API_KEY=<secret>
 ```
+
+Agent 是 Portkey-only：`PORTKEY_BASE_URL` 可以指向 Portkey 托管、本地或自托管的
+OpenAI-compatible Gateway；外部和生产 endpoint 必须使用 HTTPS。同一个
+`PORTKEY_API_KEY` 用于 LLM Gateway，并作为 `x-portkey-api-key` 发送给 M365 和 Jira
+MCP。Portkey Config 绑定在该 service API key 上，应用不发送 Config ID，也不启用
+cache。每个 LLM 请求会附带 Portkey trace ID，以及可筛选的用户 email/UPN、Entra OID
+和哈希 conversation session metadata；不会发送 Entra token。
 
 `GET http://127.0.0.1:8000/health` 应匿名返回 `{"status":"ok"}`；没有 Bearer 的
 `POST /chat` 和 `GET /me` 应返回 `401`。Agent 启动时不会连接 MCP；每次 `/chat` 先执行

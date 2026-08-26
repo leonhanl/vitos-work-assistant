@@ -123,17 +123,8 @@ async def _run_agent(
     return await service._agent.run(prompt, deps=deps)
 
 
-@pytest.mark.parametrize(
-    ("portkey_api_key", "expected_portkey_header"),
-    [
-        (None, None),
-        (SecretStr("test-portkey-key"), "test-portkey-key"),
-    ],
-)
 def test_m365_and_jira_mcp_use_their_distinct_authentication_models(
     tmp_path: Path,
-    portkey_api_key: SecretStr | None,
-    expected_portkey_header: str | None,
 ) -> None:
     m365_port, jira_port = _free_ports(2)
     m365_mcp = FastMCP(
@@ -162,7 +153,7 @@ def test_m365_and_jira_mcp_use_their_distinct_authentication_models(
         m365_mcp_url=f"http://127.0.0.1:{m365_port}/mcp",
         jira_mcp_url=f"http://127.0.0.1:{jira_port}/mcp",
         jira_service_desk_id="3",
-        portkey_api_key=portkey_api_key,
+        portkey_api_key=SecretStr("test-portkey-key"),
     )
     service = AgentService(
         settings,
@@ -187,8 +178,8 @@ def test_m365_and_jira_mcp_use_their_distinct_authentication_models(
     assert set(captured_m365.authorization) == allowed_m365_headers
     assert captured_jira.authorization
     assert set(captured_jira.authorization) == {None}
-    assert set(captured_m365.portkey_api_keys) == {expected_portkey_header}
-    assert set(captured_jira.portkey_api_keys) == {expected_portkey_header}
+    assert set(captured_m365.portkey_api_keys) == {"test-portkey-key"}
+    assert set(captured_jira.portkey_api_keys) == {"test-portkey-key"}
 
 
 def test_jira_create_requires_approval_and_forces_trusted_arguments(
@@ -288,7 +279,7 @@ def test_jira_create_requires_approval_and_forces_trusted_arguments(
         m365_mcp_url=f"http://127.0.0.1:{m365_port}/mcp",
         jira_mcp_url=f"http://127.0.0.1:{jira_port}/mcp",
         jira_service_desk_id="3",
-        portkey_api_key=None,
+        portkey_api_key=SecretStr("test-portkey-key"),
     )
     service = AgentService(
         settings,
@@ -409,7 +400,7 @@ def test_jira_read_tool_does_not_require_approval(tmp_path: Path) -> None:
         m365_mcp_url=f"http://127.0.0.1:{m365_port}/mcp",
         jira_mcp_url=f"http://127.0.0.1:{jira_port}/mcp",
         jira_service_desk_id="3",
-        portkey_api_key=None,
+        portkey_api_key=SecretStr("test-portkey-key"),
     )
     service = AgentService(settings, TokenAcquirer(), model=FunctionModel(model_function))
 

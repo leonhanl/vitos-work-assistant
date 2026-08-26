@@ -6,6 +6,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import Any
 
 from ag_ui.core import CustomEvent
@@ -14,6 +15,7 @@ from pydantic_ai.mcp import CallToolFunc, MCPToolset, ToolResult
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
 from pydantic_ai.run import AgentRunResult
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.toolsets import (
     AbstractToolset,
     ApprovalRequiredToolset,
@@ -69,8 +71,33 @@ class AgentRunDependencies:
     """Trusted data that exists only for one Agent run."""
 
     token_m: str = field(repr=False)
-    jira_user_identifier: str | None
+    user_oid: str
+    username: str | None
     jira_service_desk_id: str
+
+
+def _portkey_model_settings(
+    ctx: RunContext[AgentRunDependencies],
+) -> ModelSettings:
+    """Attach stable user, session, and run identifiers to every model request."""
+    session_id = sha256(
+        f"{ctx.deps.user_oid}\0{ctx.conversation_id}".encode()
+    ).hexdigest()
+    metadata = {
+        "_user": ctx.deps.username or ctx.deps.user_oid,
+        "user_oid": ctx.deps.user_oid,
+        "session_id": session_id,
+    }
+    return ModelSettings(
+        extra_headers={
+            "x-portkey-trace-id": ctx.run_id,
+            "x-portkey-metadata": json.dumps(
+                metadata,
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+        }
+    )
 
 
 class AgentServiceError(RuntimeError):
@@ -90,7 +117,7 @@ def _secure_jira_create_args(
     deps: AgentRunDependencies,
 ) -> dict[str, Any]:
     """Validate a Jira draft and overwrite every trusted create parameter."""
-    if not deps.jira_user_identifier:
+    if not deps.username:
         raise AgentServiceError(
             403,
             "jira_identity_unavailable",
@@ -152,7 +179,7 @@ def _secure_jira_create_args(
             ensure_ascii=False,
             separators=(",", ":"),
         ),
-        "raise_on_behalf_of": deps.jira_user_identifier,
+        "raise_on_behalf_of": deps.username,
         "strict_on_behalf": True,
     }
 
@@ -191,16 +218,15 @@ class AgentService:
     ) -> None:
         self._token_acquirer = token_acquirer
         self._jira_service_desk_id = settings.jira_service_desk_id
-        mcp_headers = None
-        if settings.portkey_api_key is not None:
-            mcp_headers = {
-                "x-portkey-api-key": settings.portkey_api_key.get_secret_value()
-            }
+        mcp_headers = {
+            "x-portkey-api-key": settings.portkey_api_key.get_secret_value()
+        }
         self._agent = Agent(
             model or create_chat_model_client(settings),
             deps_type=AgentRunDependencies,
             output_type=[str, DeferredToolRequests],
             instructions=SYSTEM_PROMPT,
+            model_settings=_portkey_model_settings,
             capabilities=[Skills(settings.skills_directory)],
         )
 
@@ -280,7 +306,8 @@ class AgentService:
     ) -> AgentRunDependencies:
         return AgentRunDependencies(
             token_m=token_m,
-            jira_user_identifier=authenticated.user.username,
+            user_oid=authenticated.user.oid,
+            username=authenticated.user.username,
             jira_service_desk_id=self._jira_service_desk_id,
         )
 

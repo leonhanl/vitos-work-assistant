@@ -13,8 +13,8 @@ SKILLS_DIRECTORY = Path(__file__).resolve().parents[1] / "skills"
 
 
 def _set_required_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("LLM_BASE_URL", "https://provider.example/v1")
-    monkeypatch.setenv("LLM_API_KEY", "test-key")
+    monkeypatch.setenv("PORTKEY_BASE_URL", "https://api.portkey.example/v1")
+    monkeypatch.setenv("PORTKEY_API_KEY", "test-portkey-key")
     monkeypatch.setenv("LLM_MODEL", "tool-model")
     monkeypatch.setenv("SKILLS_DIRECTORY", str(SKILLS_DIRECTORY))
     monkeypatch.setenv("SKILLS_VERSION", "test-version")
@@ -29,14 +29,14 @@ def _set_required_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_llm_configuration_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_configuration(monkeypatch)
-    for name in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
+    for name in ("PORTKEY_BASE_URL", "PORTKEY_API_KEY", "LLM_MODEL"):
         monkeypatch.delenv(name, raising=False)
 
     with pytest.raises(ValidationError):
         Settings()
 
 
-def test_llm_configuration_accepts_openai_compatible_endpoint(
+def test_llm_configuration_accepts_portkey_gateway(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required_configuration(monkeypatch)
@@ -46,8 +46,10 @@ def test_llm_configuration_accepts_openai_compatible_endpoint(
     assert settings.llm_model == "tool-model"
     assert settings.skills_directory == SKILLS_DIRECTORY
     assert settings.skills_version == "test-version"
-    assert settings.llm_api_key.get_secret_value() == "test-key"
-    assert str(settings.llm_base_url).startswith("https://provider.example/v1")
+    assert settings.portkey_api_key.get_secret_value() == "test-portkey-key"
+    assert str(settings.portkey_base_url).startswith(
+        "https://api.portkey.example/v1"
+    )
     assert str(settings.m365_mcp_url) == "http://127.0.0.1:8001/mcp"
     assert str(settings.jira_mcp_url) == "http://127.0.0.1:9000/mcp"
     assert settings.jira_service_desk_id == "3"
@@ -64,6 +66,8 @@ def test_llm_configuration_accepts_openai_compatible_endpoint(
     model = create_chat_model_client(settings)
     assert model.model_name == "tool-model"
     assert model.settings == {"timeout": 60.0}
+    assert model.client.api_key == "test-portkey-key"
+    assert str(model.client.base_url).startswith("https://api.portkey.example/v1")
 
 
 def test_m365_streamable_http_endpoint_is_configurable(
@@ -77,22 +81,21 @@ def test_m365_streamable_http_endpoint_is_configurable(
     assert str(settings.m365_mcp_url) == "http://m365.internal:9000/custom-mcp"
 
 
-def test_portkey_api_key_is_optional(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_portkey_api_key_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_required_configuration(monkeypatch)
     monkeypatch.delenv("PORTKEY_API_KEY", raising=False)
 
-    assert Settings().portkey_api_key is None
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 def test_portkey_api_key_is_loaded_as_a_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required_configuration(monkeypatch)
-    monkeypatch.setenv("PORTKEY_API_KEY", "test-portkey-key")
 
     api_key = Settings().portkey_api_key
 
-    assert api_key is not None
     assert api_key.get_secret_value() == "test-portkey-key"
 
 
@@ -174,7 +177,6 @@ def test_gpt_5_6_uses_chat_completions_compatible_reasoning_effort(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required_configuration(monkeypatch)
-    monkeypatch.setenv("LLM_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.setenv("LLM_MODEL", "gpt-5.6-terra")
 
     model = create_chat_model_client(Settings())
