@@ -83,8 +83,12 @@ def _portkey_observability_headers(
     session_id = sha256(
         f"{ctx.deps.user_oid}\0{ctx.conversation_id}".encode()
     ).hexdigest()
+    user = ctx.deps.username or ctx.deps.user_oid
     metadata = {
-        "_user": ctx.deps.username or ctx.deps.user_oid,
+        "_user": user,
+        # Temporary workaround: Portkey's MCP log handler reads `user` while
+        # Chat Completions and the documented metadata contract use `_user`.
+        "user": user,
         "user_oid": ctx.deps.user_oid,
         "session_id": session_id,
     }

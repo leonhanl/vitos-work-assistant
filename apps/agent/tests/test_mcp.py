@@ -201,6 +201,9 @@ def test_m365_and_jira_mcp_use_their_distinct_authentication_models(
     assert {
         json.loads(value)["_user"] for value in m365_metadata
     } == {"alice@example.com", "bob@example.com"}
+    assert {
+        json.loads(value)["user"] for value in m365_metadata
+    } == {"alice@example.com", "bob@example.com"}
 
 
 def test_jira_create_requires_approval_and_forces_trusted_arguments(
