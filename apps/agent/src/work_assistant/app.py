@@ -17,6 +17,8 @@ from work_assistant.auth import (
     get_current_user,
 )
 from work_assistant.config import Settings
+from work_assistant.feedback import PortkeyFeedbackError, PortkeyFeedbackService
+from work_assistant.models import FeedbackRequest
 from work_assistant.obo import OboTokenService
 
 logging.basicConfig(
@@ -36,7 +38,16 @@ class ChatService(Protocol):
     ) -> Response: ...
 
 
-def create_app(chat_service: ChatService | None = None) -> FastAPI:
+class FeedbackService(Protocol):
+    """The feedback operation used by the API."""
+
+    async def submit(self, trace_id: str, value: int, user: str) -> None: ...
+
+
+def create_app(
+    chat_service: ChatService | None = None,
+    feedback_service: FeedbackService | None = None,
+) -> FastAPI:
     """Create the API; tests may pass a small fake chat service."""
 
     @asynccontextmanager
@@ -44,6 +55,7 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
         # A supplied service keeps HTTP tests independent from MCP and the LLM.
         if chat_service is not None:
             application.state.chat_service = chat_service
+            application.state.feedback_service = feedback_service
             yield
             return
 
@@ -51,6 +63,10 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
         application.state.chat_service = AgentService(
             settings,
             OboTokenService(settings),
+        )
+        application.state.feedback_service = feedback_service or PortkeyFeedbackService(
+            str(settings.portkey_base_url),
+            settings.portkey_api_key.get_secret_value(),
         )
         logger.info(
             "Skills artifact loaded version=%s directory=%s",
@@ -101,6 +117,41 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
                     "The assistant encountered an internal error.",
                 )
             ) from None
+
+    @application.post("/feedback")
+    async def feedback(
+        feedback_request: FeedbackRequest,
+        request: Request,
+        current_user: CurrentUser = Depends(get_current_user),
+    ) -> dict[str, str]:
+        service: FeedbackService | None = request.app.state.feedback_service
+        if service is None:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "feedback_unavailable",
+                    "message": "Feedback is not configured.",
+                },
+            )
+
+        user = current_user.username or current_user.oid
+        try:
+            await service.submit(
+                str(feedback_request.trace_id),
+                feedback_request.value,
+                user,
+            )
+        except PortkeyFeedbackError as exc:
+            logger.warning("Feedback submission failed reason=%s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "feedback_unavailable",
+                    "message": "Feedback could not be recorded. Please try again.",
+                },
+            ) from None
+
+        return {"status": "recorded"}
 
     return application
 

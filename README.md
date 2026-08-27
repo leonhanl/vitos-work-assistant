@@ -83,6 +83,7 @@ API endpoints：
 GET  /health    anonymous
 GET  /me        Bearer Token A required
 POST /chat      Bearer Token A required
+POST /feedback  Bearer Token A required
 ```
 
 `POST /chat` 使用 AG-UI 协议。Web 通过 `@ag-ui/client` 发送包含 thread、run 和完整消息
@@ -102,9 +103,10 @@ POST /chat      Bearer Token A required
 }
 ```
 
-普通回答以 AG-UI text message events 流式返回；实际读取的文档以 `sources` custom event
-返回。需要确认的 Jira 创建操作由 Pydantic AI 转成 AG-UI interrupt，客户端用下一次
-run 的 `resume` 字段批准或拒绝，不存在项目自定义的 action endpoint。
+普通回答以 AG-UI text message events 流式返回；实际的 Portkey trace ID 和读取的文档
+分别以 `trace`、`sources` custom event 返回。需要确认的 Jira 创建操作由 Pydantic AI
+转成 AG-UI interrupt，客户端用下一次 run 的 `resume` 字段批准或拒绝，不存在项目自定义
+的 action endpoint。
 
 ## 1. 手工配置 Microsoft Entra
 
@@ -295,9 +297,15 @@ OpenAI-compatible Gateway；外部和生产 endpoint 必须使用 HTTPS。同一
 `PORTKEY_API_KEY` 用于 LLM Gateway，并作为 `x-portkey-api-key` 发送给 M365 和 Jira
 MCP。Portkey Config 绑定在该 service API key 上，应用不发送 Config ID，也不启用
 cache。LLM 请求使用原始 Agent `run_id` 作为 Portkey trace ID；LLM 和 MCP 请求都会
-附带可筛选的 `run_id`、用户 email/UPN、Entra OID 和哈希 conversation `session_id`
-metadata。MCP Gateway 会为 MCP 日志生成自己的 trace ID，因此跨 LLM/MCP 调用应通过
-`run_id` 关联；应用不会发送 Entra token。
+附带可筛选的 `run_id`、`conversation_id`、用户 email/UPN 和 Entra OID metadata。
+AG-UI 协议中的 `threadId` 会映射为同一个 Pydantic AI `conversation_id`。MCP Gateway
+会为 MCP 日志生成自己的 trace ID，因此跨 LLM/MCP 调用应通过 `run_id` 关联；应用不会
+发送 Entra token。
+
+每个成功回答会显示一次性的五星评分。Agent API 把 Pydantic AI 实际使用的 `run_id` 作为
+Portkey trace ID，并通过 `trace` custom event 返回给 Web；Web 把该 trace ID 和 `1` 到
+`5` 的整数评分发给 `POST /feedback`。Agent API 使用后端 Portkey API key 将反馈写入对应 trace；
+API key 不会发送到浏览器。MVP 不在本地保存反馈，分析和存储依赖 Portkey。
 
 `GET http://127.0.0.1:8000/health` 应匿名返回 `{"status":"ok"}`；没有 Bearer 的
 `POST /chat` 和 `GET /me` 应返回 `401`。Agent 启动时不会连接 MCP；每次 `/chat` 先执行

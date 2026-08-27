@@ -6,7 +6,6 @@ import json
 import logging
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field
-from hashlib import sha256
 from typing import Any
 
 from ag_ui.core import CustomEvent
@@ -80,9 +79,6 @@ def _portkey_observability_headers(
     ctx: RunContext[AgentRunDependencies],
 ) -> dict[str, str]:
     """Build the Portkey identifiers shared by LLM and MCP requests."""
-    session_id = sha256(
-        f"{ctx.deps.user_oid}\0{ctx.conversation_id}".encode()
-    ).hexdigest()
     user = ctx.deps.username or ctx.deps.user_oid
     metadata = {
         "_user": user,
@@ -90,7 +86,7 @@ def _portkey_observability_headers(
         # Chat Completions and the documented metadata contract use `_user`.
         "user": user,
         "user_oid": ctx.deps.user_oid,
-        "session_id": session_id,
+        "conversation_id": ctx.conversation_id,
         "run_id": ctx.run_id,
     }
     return {
@@ -296,7 +292,7 @@ class AgentService:
                 request,
                 agent=self._agent,
                 deps=deps,
-                on_complete=self._source_events,
+                on_complete=self._completion_events,
             )
         except OboTokenError as exc:
             raise self._map_obo_error(exc) from exc
@@ -328,9 +324,14 @@ class AgentService:
         )
 
     @staticmethod
-    async def _source_events(
+    async def _completion_events(
         result: AgentRunResult[Any],
     ) -> AsyncIterator[CustomEvent]:
+        yield CustomEvent(
+            name="trace",
+            value={"trace_id": result.run_id},
+        )
+
         sources = normalize_sources(result.new_messages())
         if sources:
             yield CustomEvent(

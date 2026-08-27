@@ -1,6 +1,9 @@
+import asyncio
+from types import SimpleNamespace
+
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolReturnPart
 
-from work_assistant.agent import normalize_sources
+from work_assistant.agent import AgentService, normalize_sources
 
 
 def _tool_result(name: str, content) -> ModelRequest:
@@ -40,3 +43,19 @@ def test_sources_ignore_model_text_other_tools_and_invalid_urls() -> None:
     )
 
     assert normalize_sources([model_text, unrelated, invalid]) == []
+
+
+def test_completion_events_include_the_agent_trace_id() -> None:
+    result = SimpleNamespace(
+        run_id="agent-run-1",
+        new_messages=lambda: [],
+    )
+
+    async def collect_events():
+        return [event async for event in AgentService._completion_events(result)]
+
+    events = asyncio.run(collect_events())
+
+    assert len(events) == 1
+    assert events[0].name == "trace"
+    assert events[0].value == {"trace_id": "agent-run-1"}

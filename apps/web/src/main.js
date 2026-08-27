@@ -2,7 +2,7 @@ import "./style.css";
 
 import { buildResumeArray, randomUUID } from "@ag-ui/client";
 
-import { ApiError, createChatAgent, getMe } from "./api.js";
+import { ApiError, createChatAgent, getMe, submitFeedback } from "./api.js";
 import { initializeAuth, login, logout } from "./auth.js";
 
 const JIRA_CREATE_TOOL = "jira_create_customer_request";
@@ -130,6 +130,7 @@ async function runChat(parameters = {}) {
 
   const pendingMessage = appendMessage("Assistant", "Thinking…", true);
   let hasText = false;
+  let traceId = null;
 
   try {
     await chatAgent.runAgent(parameters, {
@@ -138,7 +139,13 @@ async function runChat(parameters = {}) {
         replacePendingMessage(pendingMessage, `${textMessageBuffer}${event.delta}`);
       },
       onCustomEvent({ event }) {
-        if (event.name === "sources" && Array.isArray(event.value)) {
+        if (
+          event.name === "trace" &&
+          event.value &&
+          typeof event.value.trace_id === "string"
+        ) {
+          traceId = event.value.trace_id;
+        } else if (event.name === "sources" && Array.isArray(event.value)) {
           appendSources(pendingMessage, event.value);
         }
       },
@@ -151,7 +158,11 @@ async function runChat(parameters = {}) {
           renderJiraApproval(details.interrupts, details.messages);
           return;
         }
-        if (!hasText) pendingMessage.remove();
+        if (!hasText) {
+          pendingMessage.remove();
+          return;
+        }
+        if (traceId) appendFeedback(pendingMessage, traceId);
       },
     });
   } catch (error) {
@@ -161,6 +172,69 @@ async function runChat(parameters = {}) {
     setChatBusy(false);
     elements.messageInput.focus();
   }
+}
+
+function appendFeedback(article, traceId) {
+  const section = document.createElement("section");
+  section.className = "feedback";
+
+  const prompt = document.createElement("span");
+  prompt.textContent = "Rate this answer:";
+
+  const rating = document.createElement("span");
+  rating.className = "feedback-rating";
+  rating.setAttribute("role", "group");
+  rating.setAttribute("aria-label", "Rate this answer from 1 to 5 stars");
+
+  const status = document.createElement("span");
+  status.className = "feedback-status";
+  status.setAttribute("aria-live", "polite");
+
+  const buttons = Array.from(
+    { length: 5 },
+    (_, index) => feedbackButton(index + 1),
+  );
+
+  function feedbackButton(value) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "feedback-button";
+    button.textContent = "★";
+    button.setAttribute("aria-label", `${value} out of 5 stars`);
+    button.title = `${value} out of 5 stars`;
+    button.addEventListener("mouseenter", () => previewRating(value));
+    button.addEventListener("focus", () => previewRating(value));
+    button.addEventListener("click", async () => {
+      buttons.forEach((item) => { item.disabled = true; });
+      status.textContent = "Saving…";
+      try {
+        await submitFeedback(traceId, value);
+        buttons.forEach((item, index) => {
+          item.classList.toggle("selected", index < value);
+        });
+        status.textContent = "Thanks for your feedback.";
+      } catch {
+        buttons.forEach((item) => { item.disabled = false; });
+        previewRating(0);
+        status.textContent = "Feedback could not be saved. Try again.";
+      }
+    });
+    return button;
+  }
+
+  function previewRating(value) {
+    buttons.forEach((button, index) => {
+      button.classList.toggle("preview", index < value);
+    });
+  }
+
+  rating.addEventListener("mouseleave", () => previewRating(0));
+  rating.addEventListener("focusout", (event) => {
+    if (!rating.contains(event.relatedTarget)) previewRating(0);
+  });
+  rating.append(...buttons);
+  section.append(prompt, rating, status);
+  article.append(section);
 }
 
 function renderJiraApproval(interrupts, messages) {

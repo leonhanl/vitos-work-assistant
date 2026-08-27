@@ -14,11 +14,19 @@ export async function getMe() {
   return apiRequest("/api/me");
 }
 
-export function createChatAgent(threadId) {
+export async function submitFeedback(traceId, value) {
+  return apiRequest("/api/feedback", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ trace_id: traceId, value }),
+  });
+}
+
+export function createChatAgent(conversationId) {
   return new HttpAgent({
     url: "/api/chat",
     agentId: "work-assistant",
-    threadId,
+    threadId: conversationId,
     fetch: authenticatedFetch,
   });
 }

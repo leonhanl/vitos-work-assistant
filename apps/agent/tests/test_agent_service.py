@@ -144,10 +144,10 @@ def test_agent_service_exchanges_token_and_dispatches_with_per_run_dependencies(
     assert deps.jira_service_desk_id == "3"
     assert "alice-token-m" not in repr(deps)
     assert captured["agent"] is service._agent
-    assert captured["on_complete"] == service._source_events
+    assert captured["on_complete"] == service._completion_events
 
 
-def test_portkey_headers_track_user_session_and_agent_run() -> None:
+def test_portkey_headers_track_user_conversation_and_agent_run() -> None:
     model_settings: list[dict[str, Any]] = []
 
     def model_function(messages: list[Any], info: AgentInfo) -> ModelResponse:
@@ -213,15 +213,19 @@ def test_portkey_headers_track_user_session_and_agent_run() -> None:
         "run-3",
         "run-4",
     ]
-    assert metadata[0]["session_id"] == metadata[1]["session_id"]
-    assert metadata[0]["session_id"] != metadata[2]["session_id"]
+    assert [value["conversation_id"] for value in metadata] == [
+        "thread-1",
+        "thread-1",
+        "thread-1",
+        "thread-2",
+    ]
     assert metadata[3]["_user"] == "oid-only"
     assert metadata[3]["user"] == "oid-only"
     assert set(metadata[0]) == {
         "_user",
         "user",
         "user_oid",
-        "session_id",
+        "conversation_id",
         "run_id",
     }
     assert "token" not in headers[0]["x-portkey-metadata"]
