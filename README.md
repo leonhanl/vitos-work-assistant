@@ -294,8 +294,10 @@ Agent 是 Portkey-only：`PORTKEY_BASE_URL` 可以指向 Portkey 托管、本地
 OpenAI-compatible Gateway；外部和生产 endpoint 必须使用 HTTPS。同一个
 `PORTKEY_API_KEY` 用于 LLM Gateway，并作为 `x-portkey-api-key` 发送给 M365 和 Jira
 MCP。Portkey Config 绑定在该 service API key 上，应用不发送 Config ID，也不启用
-cache。每个 LLM 和 MCP 请求会附带同一个 Portkey trace ID，以及可筛选的用户
-email/UPN、Entra OID 和哈希 conversation session metadata；不会发送 Entra token。
+cache。LLM 请求使用原始 Agent `run_id` 作为 Portkey trace ID；LLM 和 MCP 请求都会
+附带可筛选的 `run_id`、用户 email/UPN、Entra OID 和哈希 conversation `session_id`
+metadata。MCP Gateway 会为 MCP 日志生成自己的 trace ID，因此跨 LLM/MCP 调用应通过
+`run_id` 关联；应用不会发送 Entra token。
 
 `GET http://127.0.0.1:8000/health` 应匿名返回 `{"status":"ok"}`；没有 Bearer 的
 `POST /chat` 和 `GET /me` 应返回 `401`。Agent 启动时不会连接 MCP；每次 `/chat` 先执行

@@ -202,6 +202,9 @@ def test_m365_and_jira_mcp_use_their_distinct_authentication_models(
         json.loads(value)["_user"] for value in m365_metadata
     } == {"alice@example.com", "bob@example.com"}
     assert {
+        json.loads(value)["run_id"] for value in m365_metadata
+    } == set(captured_m365.portkey_trace_ids)
+    assert {
         json.loads(value)["user"] for value in m365_metadata
     } == {"alice@example.com", "bob@example.com"}
 

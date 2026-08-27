@@ -91,6 +91,7 @@ def _portkey_observability_headers(
         "user": user,
         "user_oid": ctx.deps.user_oid,
         "session_id": session_id,
+        "run_id": ctx.run_id,
     }
     return {
         "x-portkey-trace-id": ctx.run_id,

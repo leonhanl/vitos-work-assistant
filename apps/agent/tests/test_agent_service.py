@@ -207,11 +207,23 @@ def test_portkey_headers_track_user_session_and_agent_run() -> None:
     assert metadata[0]["_user"] == "alice@example.com"
     assert metadata[0]["user"] == "alice@example.com"
     assert metadata[0]["user_oid"] == "alice"
+    assert [value["run_id"] for value in metadata] == [
+        "run-1",
+        "run-2",
+        "run-3",
+        "run-4",
+    ]
     assert metadata[0]["session_id"] == metadata[1]["session_id"]
     assert metadata[0]["session_id"] != metadata[2]["session_id"]
     assert metadata[3]["_user"] == "oid-only"
     assert metadata[3]["user"] == "oid-only"
-    assert set(metadata[0]) == {"_user", "user", "user_oid", "session_id"}
+    assert set(metadata[0]) == {
+        "_user",
+        "user",
+        "user_oid",
+        "session_id",
+        "run_id",
+    }
     assert "token" not in headers[0]["x-portkey-metadata"]
 
 
