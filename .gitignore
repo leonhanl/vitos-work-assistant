@@ -190,3 +190,4 @@ temp/
 msal_token_cache.json
 msal_token_cache.json.*
 services/jira-mcp-http/.jira.env
+.env.dev
