@@ -16,13 +16,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWKClient
 from jwt.exceptions import (
     DecodeError,
-    ExpiredSignatureError,
-    ImmatureSignatureError,
-    InvalidAudienceError,
-    InvalidIssuerError,
-    InvalidSignatureError,
     InvalidTokenError as PyJWTInvalidTokenError,
-    MissingRequiredClaimError,
     PyJWKClientConnectionError,
     PyJWKClientError,
 )
@@ -122,20 +116,10 @@ class EntraTokenValidator:
                     "strict_aud": True,
                 },
             )
-        except ExpiredSignatureError:
-            raise TokenValidationError("expired_token") from None
-        except ImmatureSignatureError:
-            raise TokenValidationError("token_not_yet_valid") from None
-        except InvalidAudienceError:
-            raise TokenValidationError("invalid_audience") from None
-        except InvalidIssuerError:
-            raise TokenValidationError("invalid_issuer") from None
-        except InvalidSignatureError:
-            raise TokenValidationError("invalid_signature") from None
-        except MissingRequiredClaimError as exc:
-            raise TokenValidationError(f"missing_claim_{exc.claim}") from None
-        except PyJWTInvalidTokenError:
-            raise TokenValidationError("invalid_token") from None
+        except PyJWTInvalidTokenError as exc:
+            # The PyJWT exception type names the rejection reason precisely enough
+            # for server-side diagnosis, e.g. ExpiredSignatureError.
+            raise TokenValidationError(type(exc).__name__) from None
 
         if claims.get("ver") != "2.0":
             raise TokenValidationError("unsupported_token_version")
