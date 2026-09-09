@@ -26,6 +26,7 @@ from work_assistant.agent import (
     AgentService,
     AgentServiceError,
     _portkey_model_settings,
+    _portkey_observability_headers,
 )
 from work_assistant.auth import AuthenticatedRequest, CurrentUser
 from work_assistant.obo import OboTokenError
@@ -229,6 +230,40 @@ def test_portkey_headers_track_user_conversation_and_agent_run() -> None:
         "run_id",
     }
     assert "token" not in headers[0]["x-portkey-metadata"]
+
+
+def test_portkey_metadata_reports_one_key_per_security_group() -> None:
+    def deps(groups: tuple[str, ...]) -> AgentRunDependencies:
+        return AgentRunDependencies(
+            token_m="secret-token-m",
+            user_oid="alice",
+            username="alice@example.com",
+            jira_service_desk_id="3",
+            groups=groups,
+        )
+
+    ctx = SimpleNamespace(
+        deps=deps(("finance", "it_admin")),
+        conversation_id="thread-1",
+        run_id="run-1",
+    )
+    metadata = json.loads(
+        _portkey_observability_headers(ctx)["x-portkey-metadata"]
+    )
+
+    assert metadata["group_finance"] == "true"
+    assert metadata["group_it_admin"] == "true"
+
+    ctx = SimpleNamespace(
+        deps=deps(()),
+        conversation_id="thread-1",
+        run_id="run-1",
+    )
+    metadata = json.loads(
+        _portkey_observability_headers(ctx)["x-portkey-metadata"]
+    )
+
+    assert not [key for key in metadata if key.startswith("group_")]
 
 
 def test_agent_service_maps_obo_consent_error(tmp_path: Path) -> None:

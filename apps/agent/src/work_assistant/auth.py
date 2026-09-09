@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Annotated, Any
@@ -23,6 +24,7 @@ from jwt.exceptions import (
 from pydantic import BaseModel, ValidationError
 
 from work_assistant.config import Settings
+from work_assistant.groups import map_group_labels
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,7 @@ class CurrentUser(BaseModel):
     oid: str
     tid: str
     username: str | None = None
+    groups: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, repr=False)
@@ -83,10 +86,17 @@ class ValidationContext:
 class EntraTokenValidator:
     """Validate single-tenant v2 access tokens issued for this API."""
 
-    def __init__(self, tenant_id: str, audience: str, required_scope: str) -> None:
+    def __init__(
+        self,
+        tenant_id: str,
+        audience: str,
+        required_scope: str,
+        group_labels: Mapping[str, str] | None = None,
+    ) -> None:
         self.tenant_id = tenant_id.lower()
         self.audience = audience.lower()
         self.required_scope = required_scope
+        self.group_labels = group_labels or {}
         self._metadata: OIDCMetadata | None = None
         self._jwks_client: PyJWKClient | None = None
         self._initialization_lock = asyncio.Lock()
@@ -147,6 +157,8 @@ class EntraTokenValidator:
             oid=oid.strip(),
             tid=tid.lower(),
             username=username.strip() if username else None,
+            # The groups claim is optional; its absence must not reject the token.
+            groups=map_group_labels(claims.get("groups"), self.group_labels),
         )
 
     async def _resolve_validation_context(self, token: str) -> ValidationContext:
@@ -210,6 +222,7 @@ def get_token_validator() -> EntraTokenValidator:
         str(settings.entra_tenant_id),
         str(settings.entra_work_assistant_api_client_id),
         settings.entra_required_scope,
+        settings.entra_group_labels,
     )
 
 

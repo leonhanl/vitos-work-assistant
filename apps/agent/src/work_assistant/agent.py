@@ -72,6 +72,7 @@ class AgentRunDependencies:
     user_oid: str
     username: str | None
     jira_service_desk_id: str
+    groups: tuple[str, ...] = ()
 
 
 def _portkey_observability_headers(
@@ -87,6 +88,8 @@ def _portkey_observability_headers(
         "user_oid": ctx.deps.user_oid,
         "conversation_id": ctx.conversation_id,
         "run_id": ctx.run_id,
+        # Metadata values must be strings, so the group array becomes one key each.
+        **{f"group_{label}": "true" for label in ctx.deps.groups},
     }
     return {
         "x-portkey-trace-id": ctx.run_id,
@@ -288,6 +291,7 @@ class AgentService:
             user_oid=authenticated.user.oid,
             username=authenticated.user.username,
             jira_service_desk_id=self._jira_service_desk_id,
+            groups=authenticated.user.groups,
         )
 
     @staticmethod

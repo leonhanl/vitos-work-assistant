@@ -168,6 +168,9 @@ API registration 不需要 redirect URI。`Admins only` 不会删除 `access_as_
 后端的 scope 校验；它只是不允许普通用户自行批准权限，权限必须由企业管理员在应用交付
 前统一批准。
 
+如果需要把用户的安全组上报给 AI Gateway，还要在这个 registration 上追加一项可选配置，
+见 [§1.4](#14-可选在-token-a-中包含-security-group)。
+
 ### 1.2 `vitos-work-assistant-client`
 
 再次进入 **App registrations → New registration**：
@@ -239,6 +242,53 @@ MCP App Registration 的创建、Graph 权限、服务端凭据和运行配置�
 以上任何一项缺失时，应由对应 owner 在所属 App Registration、独立 MCP 仓库或部署平台中
 补齐；不要把 Graph permission、MCP secret 或 MCP 服务端配置放入 Work Assistant。
 
+### 1.4 可选：在 Token A 中包含 security group
+
+这一步让 Token A 携带用户所属的安全组，Agent 会把其中与本应用相关的组作为 metadata 上报
+给 AI Gateway。不配置的话应用照常工作，只是不上报组信息。
+
+配置在 `vitos-work-assistant-api`（签发 Token A 的那个 registration）上，不是 client：
+
+1. 进入 `vitos-work-assistant-api` → **Token configuration → Add groups claim**。
+2. 勾选 **Security groups**。
+3. 展开 **Access** token 的格式选项，选择 **Group ID**（默认）。这是 Agent 期望的格式：
+   claim 里是 group object ID 的数组。不要选 `sAMAccountName` 或
+   `NetBIOSDomain\sAMAccountName`——那些只对从本地 AD 同步的组有效，cloud-only 的组会
+   回退成 object ID，导致格式不一致。
+4. 保存。可在 **Manifest** 中确认结果：
+
+   ```json
+   "groupMembershipClaims": "SecurityGroup"
+   ```
+
+   直接编辑 manifest 设置这个值等价于以上 portal 操作。
+
+接着取得需要上报的组的 object ID：**Identity → Groups → All groups**，点开目标组，在
+**Overview** 复制 **Object Id**。然后填进 Agent 的 `ENTRA_GROUP_LABELS`
+（见 [apps/agent/.env.example](apps/agent/.env.example)）：
+
+```text
+ENTRA_GROUP_LABELS={"<GROUP_OBJECT_ID>":"it_admin","<GROUP_OBJECT_ID>":"finance"}
+```
+
+键是 group object ID，值是上报用的短标签，必须是 snake_case，因为每个标签会成为一个
+`group_<label>="true"` 的 metadata 键。这张表同时充当 allowlist：**只有列出的组会离开
+应用**，用户的其他组即使出现在 claim 里也会被丢弃。这是刻意的——把用户全部组倒进第三方
+可观测系统属于目录数据过度外泄。
+
+配置完成后，Alice 需要重新登录才能拿到带 `groups` claim 的新 Token A。验证方式见
+[§4 Alice 登录与 `/me`](#alice-登录与-me)：`/me` 响应中的 `groups` 字段会列出映射后的标签。
+
+两个边界值得知道：
+
+- **Group overage。** 用户所属组超过约 200 个时，Entra 不会在 access token 中放 `groups`，
+  而是放 `_claim_names` / `_claim_sources` 指向 Graph endpoint。此时应用会当作"没有组
+  信息"处理（不报错、不阻断），需要改为调用 Graph 查询才能拿到——MVP 未实现。如果 tenant
+  中确实存在这种用户，可在 **Add groups claim** 中改选 **Groups assigned to the
+  application**，把 claim 限制在分配给该 enterprise application 的组，从根本上避免 overage。
+- **上报组不等于按组授权。** 这些 metadata 只用于 Gateway 侧的可观测性和策略；真正的数据
+  授权仍然由 Alice/Bob 自己的 Graph ACL（Token A → M → G 委托链）决定，不受这张映射表影响。
+
 ## 2. 启动后端服务
 
 ### 2.1 独立启动 `vitos-m365-mcp`
@@ -301,6 +351,16 @@ cache。LLM 请求使用原始 Agent `run_id` 作为 Portkey trace ID；LLM 和 
 AG-UI 协议中的 `threadId` 会映射为同一个 Pydantic AI `conversation_id`。MCP Gateway
 会为 MCP 日志生成自己的 trace ID，因此跨 LLM/MCP 调用应通过 `run_id` 关联；应用不会
 发送 Entra token。
+
+配置了 [§1.4](#14-可选在-token-a-中包含-security-group) 时，用户所属的安全组也会作为
+metadata 上报，供 Gateway 侧按组筛选和路由；每个组是一个 `group_<label>="true"` 键，因为
+Portkey metadata 的值只能是字符串，claim 里的数组必须拍平。
+
+这一步刻意放在应用层而不是 Gateway。只有应用知道 Entra tenant 和哪些组对本应用有意义；
+放在 Gateway 就要让这个与应用无关的基础设施持有一个应用专属的 Graph 凭据，而那个凭据比
+应用自己的 OBO 链更宽。技术上也走不通：Gateway 的 guardrail hook 只能改写请求体，写不了
+metadata，而且它运行在路由决策之后。组信息直接取自已验证 Token A 的 `groups` claim，
+因此没有额外的网络调用、凭据或权限，Token A→M→G 的身份边界不变。
 
 每个成功回答会显示一次性的五星评分。Agent API 把 Pydantic AI 实际使用的 `run_id` 作为
 Portkey trace ID，并通过 `trace` custom event 返回给 Web；Web 把该 trace ID 和 `1` 到
@@ -417,7 +477,9 @@ docker compose down
    看到 **Permissions requested** 用户 consent 页面。
 3. 页面应显示 `account.name` / `account.username`，并轻量显示
    `API authenticated as alice@...`。
-4. 浏览器实际调用 `GET /api/me`；后端返回 Alice 的 `oid`、tenant `tid` 与 username。
+4. 浏览器实际调用 `GET /api/me`；后端返回 Alice 的 `oid`、tenant `tid`、username 与
+   `groups`。`groups` 是映射后的组标签，仅在配置了
+   [§1.4](#14-可选在-token-a-中包含-security-group) 时非空。
 
 如果仍然出现 **Permissions requested (1 of 2 apps)** / **(2 of 2 apps)**，依次检查：
 

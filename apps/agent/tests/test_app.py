@@ -97,6 +97,7 @@ def test_me_returns_authenticated_identity() -> None:
         "oid": "alice-oid",
         "tid": "tenant-id",
         "username": "alice@example.com",
+        "groups": [],
     }
 
 

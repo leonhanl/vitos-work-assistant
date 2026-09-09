@@ -43,6 +43,10 @@ class Settings(BaseSettings):
         default="access_as_user",
         validation_alias="ENTRA_REQUIRED_SCOPE",
     )
+    entra_group_labels: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias="ENTRA_GROUP_LABELS",
+    )
     m365_mcp_url: AnyHttpUrl = Field(validation_alias="M365_MCP_URL")
     jira_mcp_url: AnyHttpUrl = Field(validation_alias="JIRA_MCP_URL")
     jira_service_desk_id: str = Field(validation_alias="JIRA_SERVICE_DESK_ID")

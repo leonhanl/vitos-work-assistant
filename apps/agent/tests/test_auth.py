@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -17,6 +18,7 @@ TENANT_ID = "11111111-1111-1111-1111-111111111111"
 API_CLIENT_ID = "22222222-2222-2222-2222-222222222222"
 ISSUER = f"https://login.microsoftonline.com/{TENANT_ID}/v2.0"
 GRAPH_AUDIENCE = "00000003-0000-0000-c000-000000000000"
+IT_ADMIN_GROUP_ID = "33333333-3333-3333-3333-333333333333"
 
 
 class FakeAgent:
@@ -26,8 +28,12 @@ class FakeAgent:
 
 
 class StaticKeyValidator(EntraTokenValidator):
-    def __init__(self, public_key: Any) -> None:
-        super().__init__(TENANT_ID, API_CLIENT_ID, "access_as_user")
+    def __init__(
+        self,
+        public_key: Any,
+        group_labels: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(TENANT_ID, API_CLIENT_ID, "access_as_user", group_labels)
         self._public_key = public_key
 
     async def _resolve_validation_context(self, token: str) -> ValidationContext:
@@ -212,6 +218,33 @@ def test_valid_user_can_call_me_and_chat(
         "oid": oid,
         "tid": TENANT_ID,
         "username": username,
+        "groups": [],
     }
     assert chat_response.status_code == 200
     assert chat_response.json()["threadId"] == "thread-1"
+
+
+def test_mapped_security_groups_reach_the_current_user(signing_key: Any) -> None:
+    token = _token(
+        signing_key,
+        groups=[IT_ADMIN_GROUP_ID, "99999999-9999-9999-9999-999999999999"],
+    )
+    validator = StaticKeyValidator(
+        signing_key.public_key(),
+        group_labels={IT_ADMIN_GROUP_ID: "it_admin"},
+    )
+
+    user = asyncio.run(validator.validate(token))
+
+    assert user.groups == ("it_admin",)
+
+
+def test_token_without_groups_claim_is_still_valid(signing_key: Any) -> None:
+    validator = StaticKeyValidator(
+        signing_key.public_key(),
+        group_labels={IT_ADMIN_GROUP_ID: "it_admin"},
+    )
+
+    user = asyncio.run(validator.validate(_token(signing_key)))
+
+    assert user.groups == ()
