@@ -15,6 +15,11 @@ Work Assistant 通过此服务完成以下操作：
 - `jira_get_request_type_fields`
 - `jira_create_customer_request`
 
+工具暴露面由 `startup.sh` 中的 `ENABLED_TOOLS` 控制，生产环境则由 Prisma AIRS MCP
+Gateway 集中管控。Agent 侧不再重复维护一份工具白名单。Agent 侧唯一的工具级控制是
+审批门，且只覆盖 `jira_create_customer_request`：如果这里或 gateway 放开了别的写操作
+工具，那个写操作会不经审批直接执行。
+
 ## Jira 与 Jira Service Management 的区别
 
 Jira 是底层的工作跟踪平台，提供项目、字段、工作流、权限、工作项和 issue key

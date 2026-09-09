@@ -15,11 +15,7 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
 from pydantic_ai.run import AgentRunResult
 from pydantic_ai.settings import ModelSettings
-from pydantic_ai.toolsets import (
-    AbstractToolset,
-    ApprovalRequiredToolset,
-    FilteredToolset,
-)
+from pydantic_ai.toolsets import AbstractToolset, ApprovalRequiredToolset
 from pydantic_ai.tools import DeferredToolRequests
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from pydantic_ai_harness.skills import Skills
@@ -35,7 +31,10 @@ from work_assistant.obo import MCPTokenAcquirer, OboTokenError
 logger = logging.getLogger(__name__)
 
 JIRA_CREATE_TOOL = "jira_create_customer_request"
-ALLOWED_JIRA_TOOLS = frozenset(
+# Jira tools that take a service desk ID, which the server owns rather than the model.
+# Which tools exist at all is decided by the MCP server's ENABLED_TOOLS and, in
+# production, by the Prisma AIRS MCP Gateway.
+JIRA_SERVICE_DESK_TOOLS = frozenset(
     {
         "jira_get_request_types",
         "jira_get_request_type_fields",
@@ -171,7 +170,7 @@ async def _process_jira_tool_call(
     args: dict[str, Any],
 ) -> ToolResult:
     """Apply Jira policy immediately before an MCP request leaves the Agent."""
-    if name in ALLOWED_JIRA_TOOLS:
+    if name in JIRA_SERVICE_DESK_TOOLS:
         args = {**args, "service_desk_id": ctx.deps.jira_service_desk_id}
     if name == JIRA_CREATE_TOOL:
         args = _secure_jira_create_args(args, ctx.deps)
@@ -236,12 +235,8 @@ class AgentService:
                 tool_error_behavior="error",
                 process_tool_call=_process_jira_tool_call,
             )
-            allowed_toolset = FilteredToolset(
-                base_toolset,
-                lambda run_ctx, tool: tool.name in ALLOWED_JIRA_TOOLS,
-            )
             return ApprovalRequiredToolset(
-                allowed_toolset,
+                base_toolset,
                 lambda run_ctx, tool, args: tool.name == JIRA_CREATE_TOOL,
             )
 
