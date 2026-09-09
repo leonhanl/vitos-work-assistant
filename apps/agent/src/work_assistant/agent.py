@@ -124,7 +124,7 @@ def _secure_jira_create_args(
     args: Mapping[str, Any],
     deps: AgentRunDependencies,
 ) -> dict[str, Any]:
-    """Validate a Jira draft and overwrite every trusted create parameter."""
+    """Overwrite every trusted Jira create parameter and tidy the drafted fields."""
     if not deps.username:
         raise AgentServiceError(
             403,
@@ -132,56 +132,28 @@ def _secure_jira_create_args(
             "A Jira customer identity could not be determined for the current user.",
         )
 
-    request_type_id = str(args.get("request_type_id", "")).strip()
-    if not request_type_id:
-        raise AgentServiceError(
-            502,
-            "invalid_jira_ticket_draft",
-            "The assistant did not select a valid Jira request type.",
-        )
-
+    # The MCP tool schema types this as a JSON string, so it must be parsed before
+    # the drafted fields can be tidied and re-serialized.
     raw_field_values = args.get("request_field_values")
     try:
         if isinstance(raw_field_values, str):
-            request_field_values = json.loads(raw_field_values)
-        elif isinstance(raw_field_values, Mapping):
-            request_field_values = dict(raw_field_values)
-        else:
-            raise ValueError
-    except (TypeError, ValueError, json.JSONDecodeError):
+            raw_field_values = json.loads(raw_field_values)
+        request_field_values = dict(raw_field_values)
+    except (TypeError, ValueError):
         raise AgentServiceError(
             502,
             "invalid_jira_ticket_draft",
-            "The assistant did not produce valid Jira request fields.",
+            "The assistant did not produce a valid Jira ticket draft.",
         ) from None
 
-    if not isinstance(request_field_values, dict):
-        raise AgentServiceError(
-            502,
-            "invalid_jira_ticket_draft",
-            "The assistant did not produce valid Jira request fields.",
-        )
+    for field_id in ("summary", "description"):
+        value = request_field_values.get(field_id)
+        if isinstance(value, str):
+            request_field_values[field_id] = value.strip()
 
-    summary = request_field_values.get("summary")
-    description = request_field_values.get("description")
-    if not isinstance(summary, str) or not summary.strip():
-        raise AgentServiceError(
-            502,
-            "invalid_jira_ticket_draft",
-            "The Jira ticket draft is missing a summary.",
-        )
-    if not isinstance(description, str) or not description.strip():
-        raise AgentServiceError(
-            502,
-            "invalid_jira_ticket_draft",
-            "The Jira ticket draft is missing a description.",
-        )
-
-    request_field_values["summary"] = summary.strip()
-    request_field_values["description"] = description.strip()
     return {
         "service_desk_id": deps.jira_service_desk_id,
-        "request_type_id": request_type_id,
+        "request_type_id": args.get("request_type_id"),
         "request_field_values": json.dumps(
             request_field_values,
             ensure_ascii=False,
