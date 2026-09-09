@@ -268,8 +268,12 @@ MCP App Registration 的创建、Graph 权限、服务端凭据和运行配置�
 （见 [apps/agent/.env.example](apps/agent/.env.example)）：
 
 ```text
-ENTRA_GROUP_LABELS={"<GROUP_OBJECT_ID>":"it_admin","<GROUP_OBJECT_ID>":"finance"}
+ENTRA_GROUP_LABELS='{"<GROUP_OBJECT_ID>":"it_admin","<GROUP_OBJECT_ID>":"finance"}'
 ```
+
+外层单引号是必需的：`scripts/start-local.sh` 用 shell `source` 加载 `.env`，不加单引号
+JSON 里的双引号会被 shell 剥掉，Agent 启动时会报
+`error parsing value for field "entra_group_labels"`。
 
 键是 group object ID，值是上报用的短标签，必须是 snake_case，因为每个标签会成为一个
 `group_<label>="true"` 的 metadata 键。这张表同时充当 allowlist：**只有列出的组会离开
