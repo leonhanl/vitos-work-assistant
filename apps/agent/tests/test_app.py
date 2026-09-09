@@ -76,12 +76,12 @@ def _ag_ui_input() -> dict:
 
 
 def test_health() -> None:
-    with TestClient(create_app(FakeAgent())) as client:
+    with TestClient(create_app(FakeAgent(), FakeFeedback())) as client:
         assert client.get("/health").json() == {"status": "ok"}
 
 
 def test_chat_requires_bearer_token() -> None:
-    with TestClient(create_app(FakeAgent())) as client:
+    with TestClient(create_app(FakeAgent(), FakeFeedback())) as client:
         response = client.post("/chat", json=_ag_ui_input())
 
     assert response.status_code == 401

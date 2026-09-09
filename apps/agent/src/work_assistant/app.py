@@ -124,16 +124,7 @@ def create_app(
         request: Request,
         current_user: CurrentUser = Depends(get_current_user),
     ) -> dict[str, str]:
-        service: FeedbackService | None = request.app.state.feedback_service
-        if service is None:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "code": "feedback_unavailable",
-                    "message": "Feedback is not configured.",
-                },
-            )
-
+        service: FeedbackService = request.app.state.feedback_service
         user = current_user.username or current_user.oid
         try:
             await service.submit(
