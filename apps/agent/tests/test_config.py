@@ -140,13 +140,11 @@ def test_jira_configuration_is_required(monkeypatch: pytest.MonkeyPatch) -> None
         Settings()
 
 
-@pytest.mark.parametrize("service_desk_id", ["", "0", "-1", "desk-3"])
-def test_jira_service_desk_id_must_be_positive_numeric(
+def test_jira_service_desk_id_must_not_be_blank(
     monkeypatch: pytest.MonkeyPatch,
-    service_desk_id: str,
 ) -> None:
     _set_required_configuration(monkeypatch)
-    monkeypatch.setenv("JIRA_SERVICE_DESK_ID", service_desk_id)
+    monkeypatch.setenv("JIRA_SERVICE_DESK_ID", "   ")
 
     with pytest.raises(ValidationError):
         Settings()

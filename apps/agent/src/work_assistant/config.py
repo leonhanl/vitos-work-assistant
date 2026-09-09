@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     m365_mcp_url: AnyHttpUrl = Field(validation_alias="M365_MCP_URL")
     jira_mcp_url: AnyHttpUrl = Field(validation_alias="JIRA_MCP_URL")
     jira_service_desk_id: str = Field(validation_alias="JIRA_SERVICE_DESK_ID")
+
     @field_validator(
         "llm_model",
         "skills_version",
@@ -59,28 +60,14 @@ class Settings(BaseSettings):
             raise ValueError("must not be blank")
         return value
 
-    @field_validator("jira_service_desk_id")
-    @classmethod
-    def jira_service_desk_id_must_be_positive(cls, value: str) -> str:
-        if not value.isdigit() or int(value) < 1:
-            raise ValueError("must be a positive numeric service desk ID")
-        return value
-
-    @field_validator("entra_required_scope")
-    @classmethod
-    def scope_must_be_a_single_value(cls, value: str) -> str:
-        if any(character.isspace() for character in value):
-            raise ValueError("must contain exactly one scope value")
-        return value
-
     @field_validator("entra_mcp_scope")
     @classmethod
-    def optional_scope_must_be_a_single_value(cls, value: str | None) -> str | None:
+    def optional_scope_must_not_be_blank(cls, value: str | None) -> str | None:
         if value is None:
             return None
         value = value.strip()
-        if not value or any(character.isspace() for character in value):
-            raise ValueError("must contain exactly one scope value")
+        if not value:
+            raise ValueError("must not be blank")
         return value
 
     @field_validator("portkey_api_key", "entra_work_assistant_api_client_secret")
