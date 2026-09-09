@@ -7,7 +7,6 @@ import logging
 from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Annotated, Any
-from urllib.parse import urlparse
 
 import anyio
 import httpx
@@ -104,10 +103,6 @@ class EntraTokenValidator:
             f"https://login.microsoftonline.com/{self.tenant_id}"
             "/v2.0/.well-known/openid-configuration"
         )
-
-    @property
-    def expected_issuer(self) -> str:
-        return f"https://login.microsoftonline.com/{self.tenant_id}/v2.0"
 
     async def validate(self, token: str) -> CurrentUser:
         if not token.strip():
@@ -207,35 +202,20 @@ class EntraTokenValidator:
         return self._metadata, self._jwks_client
 
     async def _fetch_metadata(self) -> OIDCMetadata:
+        """Read the issuer and JWKS endpoint from Entra's OIDC discovery document."""
         try:
-            async with httpx.AsyncClient(
-                timeout=METADATA_TIMEOUT_SECONDS,
-                follow_redirects=False,
-            ) as client:
+            async with httpx.AsyncClient(timeout=METADATA_TIMEOUT_SECONDS) as client:
                 response = await client.get(self.metadata_url)
                 response.raise_for_status()
                 payload = response.json()
-        except (httpx.HTTPError, ValueError):
+                return OIDCMetadata(
+                    issuer=payload["issuer"],
+                    jwks_uri=payload["jwks_uri"],
+                )
+        except (httpx.HTTPError, ValueError, KeyError, TypeError):
             raise AuthenticationServiceError(
                 "Microsoft Entra OIDC metadata is unavailable."
             ) from None
-
-        if not isinstance(payload, dict):
-            raise AuthenticationServiceError("Invalid Microsoft Entra OIDC metadata.")
-        issuer = payload.get("issuer")
-        jwks_uri = payload.get("jwks_uri")
-        if not isinstance(issuer, str) or not isinstance(jwks_uri, str):
-            raise AuthenticationServiceError("Invalid Microsoft Entra OIDC metadata.")
-        if issuer.rstrip("/").lower() != self.expected_issuer.lower():
-            raise AuthenticationServiceError("Unexpected Microsoft Entra issuer metadata.")
-
-        parsed_jwks_uri = urlparse(jwks_uri)
-        if (
-            parsed_jwks_uri.scheme != "https"
-            or parsed_jwks_uri.hostname != "login.microsoftonline.com"
-        ):
-            raise AuthenticationServiceError("Unexpected Microsoft Entra JWKS endpoint.")
-        return OIDCMetadata(issuer=issuer.rstrip("/"), jwks_uri=jwks_uri)
 
 
 @lru_cache(maxsize=1)
