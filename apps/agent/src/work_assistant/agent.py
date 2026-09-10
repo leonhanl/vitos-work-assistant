@@ -8,8 +8,9 @@ from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from ag_ui.core import CustomEvent
-from pydantic_ai import Agent, RunContext
+import httpx
+from ag_ui.core import BaseEvent, CustomEvent, RunErrorEvent
+from pydantic_ai import Agent, ModelHTTPError, RunContext
 from pydantic_ai.mcp import CallToolFunc, MCPToolset, ToolResult
 from pydantic_ai.messages import ModelMessage, ModelRequest, ToolReturnPart
 from pydantic_ai.models import Model
@@ -17,7 +18,7 @@ from pydantic_ai.run import AgentRunResult
 from pydantic_ai.settings import ModelSettings
 from pydantic_ai.toolsets import AbstractToolset, ApprovalRequiredToolset
 from pydantic_ai.tools import DeferredToolRequests
-from pydantic_ai.ui.ag_ui import AGUIAdapter
+from pydantic_ai.ui.ag_ui import AGUIAdapter, AGUIEventStream
 from pydantic_ai_harness.skills import Skills
 from starlette.requests import Request
 from starlette.responses import Response
@@ -120,6 +121,124 @@ class AgentServiceError(RuntimeError):
 
 class JiraToolCallError(RuntimeError):
     """A Jira MCP tool call failed without exposing its private details."""
+
+
+RATE_LIMITED = "gateway_rate_limited"
+BUDGET_EXHAUSTED = "gateway_budget_exhausted"
+EXECUTION_FAILED = "agent_execution_failed"
+
+RUN_ERROR_MESSAGES = {
+    # Portkey's 429 carries no Retry-After, but its bucket resets on the wall-clock
+    # minute, so waiting a minute is always enough for the per-minute rate limit
+    # configured on the service API key.
+    RATE_LIMITED: (
+        "The AI gateway is rate limiting requests. Please wait a minute and try again."
+    ),
+    # Unlike a rate limit, an exhausted budget does not recover on its own: it needs an
+    # administrator to raise the limit or the policy's periodic reset. So this message
+    # must not invite a retry. It also names no amount and no group, because the budget
+    # policy is internal: users must not learn another department's limit from an error.
+    BUDGET_EXHAUSTED: (
+        "The AI assistant's usage budget has been used up. Please contact IT support; "
+        "retrying will not help."
+    ),
+    EXECUTION_FAILED: "The assistant could not complete this request.",
+}
+
+# Gateway usage-policy rejections: expected policy outcomes, not application faults.
+POLICY_DENIAL_CODES = {429: RATE_LIMITED, 412: BUDGET_EXHAUSTED}
+
+# Doubles as the set of codes logged at WARNING rather than ERROR. A rate limit and an
+# exhausted budget are logged apart on purpose: one is a capacity signal, the other a
+# budget signal, and they call for different responses.
+RUN_ERROR_LOG_SUMMARY = {
+    RATE_LIMITED: "AI gateway rate limit hit",
+    BUDGET_EXHAUSTED: "AI gateway budget exhausted",
+}
+
+
+@dataclass(frozen=True)
+class RunFailure:
+    """A failed Agent run described for the client, with no gateway internals."""
+
+    code: str
+    message: str
+    status_code: int | None = None
+    source: str | None = None
+    """Which gateway failed, "llm" or "mcp"; they enforce separate rate limits."""
+
+
+def _policy_denial(status_code: int, source: str) -> RunFailure:
+    """Describe a usage-policy rejection, recording which gateway rejected it."""
+    code = POLICY_DENIAL_CODES[status_code]
+    return RunFailure(code, RUN_ERROR_MESSAGES[code], status_code, source)
+
+
+def _classify_run_error(error: Exception) -> RunFailure:
+    """Describe a failed run for the client without exposing gateway details.
+
+    A usage-policy rejection can surface as a model error or, when the MCP Gateway
+    rejects the request, as a transport error that a tool-call wrapper has already
+    re-raised from, so the `__cause__` chain is walked rather than just the outermost
+    error. MCP requests carry the same `x-portkey-metadata` as model requests, so they
+    match the same metadata-scoped policies and see the same rejections.
+    """
+    exc: BaseException | None = error
+    for _ in range(5):
+        if exc is None:
+            break
+        if isinstance(exc, AgentServiceError):
+            return RunFailure(exc.code, exc.public_message, exc.status_code)
+        if isinstance(exc, ModelHTTPError) and exc.status_code in POLICY_DENIAL_CODES:
+            return _policy_denial(exc.status_code, "llm")
+        if (
+            isinstance(exc, httpx.HTTPStatusError)
+            and exc.response.status_code in POLICY_DENIAL_CODES
+        ):
+            return _policy_denial(exc.response.status_code, "mcp")
+        exc = exc.__cause__
+    return RunFailure(EXECUTION_FAILED, RUN_ERROR_MESSAGES[EXECUTION_FAILED])
+
+
+class _LoggingAGUIEventStream(AGUIEventStream[AgentRunDependencies, Any]):
+    """Log why a run failed, and give the client a safe message and a stable code.
+
+    A run failure happens while the AG-UI response is already streaming, so it never
+    reaches the exception handlers around `dispatch_chat`; without this the failure is
+    never logged and the raw provider error is streamed to the browser.
+    """
+
+    async def on_error(self, error: Exception) -> AsyncIterator[BaseEvent]:
+        failure = _classify_run_error(error)
+        summary = RUN_ERROR_LOG_SUMMARY.get(failure.code)
+        logger.log(
+            logging.WARNING if summary else logging.ERROR,
+            "%s code=%s status=%s source=%s error_type=%s detail=%s",
+            summary or "Agent run failed",
+            failure.code,
+            failure.status_code,
+            failure.source,
+            type(error).__name__,
+            error,
+            exc_info=error,
+        )
+        async for event in super().on_error(error):
+            if isinstance(event, RunErrorEvent):
+                event = event.model_copy(
+                    update={"message": failure.message, "code": failure.code}
+                )
+            yield event
+
+
+class _LoggingAGUIAdapter(AGUIAdapter[AgentRunDependencies, Any]):
+    """AG-UI adapter whose RUN_ERROR events are logged and sanitized."""
+
+    def build_event_stream(self) -> AGUIEventStream[AgentRunDependencies, Any]:
+        return _LoggingAGUIEventStream(
+            self.run_input,
+            accept=self.accept,
+            ag_ui_version=self.ag_ui_version,
+        )
 
 
 def _secure_jira_create_args(
@@ -258,7 +377,7 @@ class AgentService:
                 authenticated.token_a
             )
             deps = self._run_dependencies(token_m, authenticated)
-            return await AGUIAdapter.dispatch_request(
+            return await _LoggingAGUIAdapter.dispatch_request(
                 request,
                 agent=self._agent,
                 deps=deps,

@@ -5,9 +5,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
+from ag_ui.core import RunErrorEvent
 from pydantic import SecretStr
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelHTTPError
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
@@ -25,6 +27,8 @@ from work_assistant.agent import (
     AgentRunDependencies,
     AgentService,
     AgentServiceError,
+    JiraToolCallError,
+    _LoggingAGUIEventStream,
     _portkey_model_settings,
     _portkey_observability_headers,
 )
@@ -318,3 +322,153 @@ def test_agent_service_logs_unexpected_dispatch_error_with_traceback(
     assert record.exc_info is not None
     assert record.exc_info[0] is RuntimeError
     assert "gateway rejected request" in caplog.text
+
+
+def _run_error(error: Exception) -> RunErrorEvent:
+    """Drive the streamed error path the same way a failed Agent run does."""
+
+    async def collect() -> list[Any]:
+        return [event async for event in _LoggingAGUIEventStream(None).on_error(error)]
+
+    events = asyncio.run(collect())
+    return next(event for event in events if isinstance(event, RunErrorEvent))
+
+
+def _mcp_status_error(status_code: int) -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "http://gateway.invalid/m365-mcp/mcp")
+    return httpx.HTTPStatusError(
+        f"Client error '{status_code}'",
+        request=request,
+        response=httpx.Response(status_code, request=request),
+    )
+
+
+def test_llm_gateway_rate_limit_is_logged_and_reported_without_gateway_details(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    error = ModelHTTPError(
+        status_code=429,
+        model_name="deepseek-v4-pro",
+        body={"message": "Portkey Error: apikey 2452ec26 rate limit exceeded"},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="work_assistant.agent"):
+        event = _run_error(error)
+
+    assert event.code == "gateway_rate_limited"
+    assert "wait a minute" in event.message
+    assert "apikey" not in event.message
+    record = next(
+        record for record in caplog.records if record.name == "work_assistant.agent"
+    )
+    assert record.levelno == logging.WARNING
+    assert "AI gateway rate limit hit" in record.getMessage()
+    assert "code=gateway_rate_limited status=429 source=llm" in record.getMessage()
+    # The full provider error stays server-side for diagnosis.
+    assert record.exc_info is not None
+    assert "apikey 2452ec26" in caplog.text
+
+
+def test_mcp_gateway_rate_limit_is_reported_as_a_rate_limit(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="work_assistant.agent"):
+        event = _run_error(_mcp_status_error(429))
+
+    assert event.code == "gateway_rate_limited"
+    record = next(
+        record for record in caplog.records if record.name == "work_assistant.agent"
+    )
+    assert "code=gateway_rate_limited status=429 source=mcp" in record.getMessage()
+
+
+def test_llm_gateway_budget_exhausted_is_logged_and_reported_without_gateway_details(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    error = ModelHTTPError(
+        status_code=412,
+        model_name="deepseek-v4-pro",
+        body={"message": "Portkey Error: budget limit exceeded for apikey 2452ec26"},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="work_assistant.agent"):
+        event = _run_error(error)
+
+    assert event.code == "gateway_budget_exhausted"
+    assert "apikey" not in event.message
+    record = next(
+        record for record in caplog.records if record.name == "work_assistant.agent"
+    )
+    assert record.levelno == logging.WARNING
+    assert "AI gateway budget exhausted" in record.getMessage()
+    assert "code=gateway_budget_exhausted status=412 source=llm" in record.getMessage()
+    # The full provider error stays server-side for diagnosis.
+    assert record.exc_info is not None
+    assert "apikey 2452ec26" in caplog.text
+
+
+def test_budget_exhausted_message_does_not_invite_a_retry() -> None:
+    """An exhausted budget needs an administrator, so a retry hint would mislead."""
+    message = _run_error(
+        ModelHTTPError(status_code=412, model_name="deepseek-v4-pro")
+    ).message
+
+    assert "try again" not in message.lower()
+    assert "wait" not in message.lower()
+    assert "contact IT support" in message
+
+
+def test_mcp_gateway_budget_exhausted_is_reported_as_budget_exhausted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="work_assistant.agent"):
+        event = _run_error(_mcp_status_error(412))
+
+    assert event.code == "gateway_budget_exhausted"
+    record = next(
+        record for record in caplog.records if record.name == "work_assistant.agent"
+    )
+    assert "code=gateway_budget_exhausted status=412 source=mcp" in record.getMessage()
+
+
+def test_rate_limit_wrapped_by_a_jira_tool_call_is_still_reported_as_a_rate_limit() -> (
+    None
+):
+    try:
+        raise JiraToolCallError("Jira could not complete the requested operation.")
+    except JiraToolCallError as exc:
+        exc.__cause__ = _mcp_status_error(429)
+        wrapped = exc
+
+    assert _run_error(wrapped).code == "gateway_rate_limited"
+
+
+def test_agent_service_error_keeps_its_own_code_and_public_message() -> None:
+    event = _run_error(
+        AgentServiceError(
+            403,
+            "jira_identity_unavailable",
+            "A Jira customer identity could not be determined for the current user.",
+        )
+    )
+
+    assert event.code == "jira_identity_unavailable"
+    assert event.message == (
+        "A Jira customer identity could not be determined for the current user."
+    )
+
+
+def test_unexpected_run_error_is_logged_at_error_without_leaking_its_detail(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.ERROR, logger="work_assistant.agent"):
+        event = _run_error(RuntimeError("connection reset by peer"))
+
+    assert event.code == "agent_execution_failed"
+    assert event.message == "The assistant could not complete this request."
+    record = next(
+        record for record in caplog.records if record.name == "work_assistant.agent"
+    )
+    assert record.levelno == logging.ERROR
+    assert "Agent run failed code=agent_execution_failed" in record.getMessage()
+    assert "connection reset by peer" in caplog.text

@@ -149,8 +149,15 @@ async function runChat(parameters = {}) {
           appendSources(pendingMessage, event.value);
         }
       },
-      onRunErrorEvent() {
-        showError(elements.chatError, "The assistant request failed. Please try again.");
+      onRunErrorEvent({ event }) {
+        // The server sends a safe message plus a stable code; RUN_ERROR is never
+        // followed by RUN_FINISHED, so the pending bubble has to be cleared here.
+        console.error("Agent run error", event.code, event.message);
+        if (!hasText) pendingMessage.remove();
+        showError(
+          elements.chatError,
+          event.message || "The assistant request failed. Please try again.",
+        );
       },
       onRunFinishedEvent(details) {
         if (details.outcome === "interrupt") {
