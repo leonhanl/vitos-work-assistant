@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@ag-ui/client": "^0.0.58",
-    "@azure/msal-browser": "^5.17.1"
+    "@azure/msal-browser": "^5.17.1",
+    "dompurify": "^3.4.15",
+    "marked": "^18.0.12"
   },
   "devDependencies": {
     "vite": "^8.1.5"

@@ -1,11 +1,24 @@
 import "./style.css";
 
 import { buildResumeArray, randomUUID } from "@ag-ui/client";
+import DOMPurify from "dompurify";
+import { marked } from "marked";
 
 import { ApiError, createChatAgent, getMe, submitFeedback } from "./api.js";
 import { initializeAuth, login, logout } from "./auth.js";
 
 const JIRA_CREATE_TOOL = "jira_create_customer_request";
+
+marked.use({ gfm: true, breaks: true });
+
+// Assistant answers are Markdown, so they are rendered as HTML. The model output is
+// untrusted, so the generated HTML is sanitized before it reaches the DOM.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A" && node.hasAttribute("href")) {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
 
 const elements = {
   loadingView: document.querySelector("#loading-view"),
@@ -353,7 +366,8 @@ function appendMessage(label, text, pending = false) {
 
   const heading = document.createElement("h2");
   heading.textContent = label;
-  const content = document.createElement("p");
+  const content = document.createElement("div");
+  content.className = "message-body";
   content.textContent = text;
 
   article.append(heading, content);
@@ -364,7 +378,9 @@ function appendMessage(label, text, pending = false) {
 
 function replacePendingMessage(article, answer) {
   article.classList.remove("pending");
-  article.querySelector("p").textContent = answer;
+  const content = article.querySelector(".message-body");
+  content.classList.add("markdown");
+  content.innerHTML = DOMPurify.sanitize(marked.parse(answer));
 }
 
 function appendSources(article, sources = []) {
