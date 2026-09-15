@@ -9,11 +9,25 @@ Work Assistant 通过此服务完成以下操作：
 - 查询某个请求类型需要填写的字段；
 - 在用户确认 ticket 内容后创建 JSM 客户请求。
 
-该服务有意限制为只开放以下 MCP 工具：
+该服务开放以下提单流程所需的 MCP 工具：
 
 - `jira_get_request_types`
 - `jira_get_request_type_fields`
 - `jira_create_customer_request`
+
+为演示 AI Gateway 层的工具限制，另外开放三个研发项目管理工具。在此演示的职责划分中，
+Bob 负责 IT 支持，不负责研发版本发布或迭代规划，因此不需要访问这些工具：
+
+- `jira_create_version`：创建项目版本，属于发布管理职责；
+- `jira_update_version`：修改版本信息、发布或归档状态，属于发布管理职责；
+- `jira_create_sprint`：创建研发迭代，属于迭代规划职责。
+
+启动脚本启用 `jira_service_desk`、`jira_projects` 和 `jira_agile` 工具组，再通过
+`ENABLED_TOOLS` 将暴露范围限定为上述六个工具。演示时，在 AI Gateway 中为 IT 支持
+场景禁用新增的三个项目管理工具，仅保留原有三个提单工具，并让 Agent 通过 Gateway 连接此服务。
+重启 MCP 服务并刷新 Gateway 的工具列表后，检查直连服务的 `tools/list` 包含六个工具，
+经过 Gateway 的 `tools/list` 只包含原有三个工具；再通过 Gateway 直接发起被禁用工具的
+`tools/call`，确认调用也会被拒绝。
 
 工具暴露面由 `startup.sh` 中的 `ENABLED_TOOLS` 控制，生产环境则由 Prisma AIRS MCP
 Gateway 集中管控。Agent 侧不再重复维护一份工具白名单。Agent 侧唯一的工具级控制是
@@ -76,8 +90,10 @@ Service account 需要比普通客户账号更多的权限，因为 JSM API 不�
 设置 `raiseOnBehalfOf`。相关 API 约束可参考
 [创建客户请求](https://developer.atlassian.com/cloud/jira/service-desk/rest/api-group-request/#api-rest-servicedeskapi-request-post)。
 
-为 service account 创建 scoped API token，只授予三个已开放工具所需的 Jira/JSM 读取
-和写入 scope。Token 应设置有限的有效期，并制定轮换计划。Atlassian service-account
+为 service account 创建 scoped API token，授予原有三个提单工具所需的 Jira/JSM 读取
+和写入 scope。新增的项目管理工具用于验证 Gateway 拒绝访问，无需为此扩大 token 权限。
+验证时应确认拒绝来自 Gateway 的工具策略，而不是上游 Jira 返回的权限错误。
+Token 应设置有限的有效期，并制定轮换计划。Atlassian service-account
 token 同时受到 API scope 和 Jira 项目权限的检查。更多信息可参考
 [管理 service account API token](https://support.atlassian.com/user-management/docs/manage-api-tokens-for-service-accounts/)。
 
@@ -128,7 +144,7 @@ cd services/jira-mcp-http
 ./startup.sh
 ```
 
-启动脚本会替换已有的 `mcp-atlassian` 容器，启动上游发布的 Docker 镜像，并在以下地址
+启动脚本会替换已有的 `vitos-atlassian-mcp` 容器，启动上游发布的 Docker 镜像，并在以下地址
 提供 MCP endpoint：
 
 ```text
@@ -138,14 +154,14 @@ http://127.0.0.1:9000/mcp
 可以通过以下命令查看容器状态和日志：
 
 ```bash
-docker ps --filter name=mcp-atlassian
-docker logs mcp-atlassian
+docker ps --filter name=vitos-atlassian-mcp
+docker logs vitos-atlassian-mcp
 ```
 
 修改 `.jira.env` 后，重新运行 `./startup.sh` 即可应用新配置。停止服务但保留配置文件：
 
 ```bash
-docker stop mcp-atlassian
+docker stop vitos-atlassian-mcp
 ```
 
 当前启动脚本使用 `latest` 镜像标签。在共享环境或生产环境中使用之前，应当固定到经过测试的
@@ -196,7 +212,7 @@ endpoint 的进程都可以通过 service account 执行操作。启动脚本目
   Bob 已经是该服务项目能够识别的客户，并确认开发站点接受哪一种用户标识。
 - **缺少必填字段：** 使用 `jira_get_request_type_fields` 查询请求类型，并在
   `request_field_values` 中提供全部必填字段。
-- **无法访问 MCP endpoint：** 检查 Docker 状态和 `docker logs mcp-atlassian`，并确认
+- **无法访问 MCP endpoint：** 检查 Docker 状态和 `docker logs vitos-atlassian-mcp`，并确认
   MCP 客户端连接的是 `9000` 端口下的 `/mcp` 路径。
 
 上游项目的更多配置及工具信息，请参考
