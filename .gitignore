@@ -195,3 +195,4 @@ services/jira-mcp-http/.jira.env
 
 .codex-build/
 output/
+presentations/
