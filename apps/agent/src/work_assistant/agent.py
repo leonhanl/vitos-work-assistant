@@ -125,6 +125,7 @@ class JiraToolCallError(RuntimeError):
 
 RATE_LIMITED = "gateway_rate_limited"
 BUDGET_EXHAUSTED = "gateway_budget_exhausted"
+GUARDRAIL_BLOCKED = "gateway_guardrail_blocked"
 EXECUTION_FAILED = "agent_execution_failed"
 
 RUN_ERROR_MESSAGES = {
@@ -142,11 +143,20 @@ RUN_ERROR_MESSAGES = {
         "The AI assistant's usage budget has been used up. Please contact IT support; "
         "retrying will not help."
     ),
+    GUARDRAIL_BLOCKED: (
+        "This request was blocked by the corporate security policy. "
+        "Please revise your request, or contact IT support if you think this is a mistake."
+    ),
     EXECUTION_FAILED: "The assistant could not complete this request.",
 }
 
-# Gateway usage-policy rejections: expected policy outcomes, not application faults.
-POLICY_DENIAL_CODES = {429: RATE_LIMITED, 412: BUDGET_EXHAUSTED}
+# Gateway policy rejections: expected policy outcomes, not application faults.
+# Portkey returns 446 when a guardrail fails with deny enabled.
+POLICY_DENIAL_CODES = {
+    429: RATE_LIMITED,
+    412: BUDGET_EXHAUSTED,
+    446: GUARDRAIL_BLOCKED,
+}
 
 # Doubles as the set of codes logged at WARNING rather than ERROR. A rate limit and an
 # exhausted budget are logged apart on purpose: one is a capacity signal, the other a
@@ -154,6 +164,7 @@ POLICY_DENIAL_CODES = {429: RATE_LIMITED, 412: BUDGET_EXHAUSTED}
 RUN_ERROR_LOG_SUMMARY = {
     RATE_LIMITED: "AI gateway rate limit hit",
     BUDGET_EXHAUSTED: "AI gateway budget exhausted",
+    GUARDRAIL_BLOCKED: "AI gateway guardrail blocked request",
 }
 
 
@@ -169,7 +180,7 @@ class RunFailure:
 
 
 def _policy_denial(status_code: int, source: str) -> RunFailure:
-    """Describe a usage-policy rejection, recording which gateway rejected it."""
+    """Describe a policy rejection, recording which gateway rejected it."""
     code = POLICY_DENIAL_CODES[status_code]
     return RunFailure(code, RUN_ERROR_MESSAGES[code], status_code, source)
 
@@ -177,7 +188,7 @@ def _policy_denial(status_code: int, source: str) -> RunFailure:
 def _classify_run_error(error: Exception) -> RunFailure:
     """Describe a failed run for the client without exposing gateway details.
 
-    A usage-policy rejection can surface as a model error or, when the MCP Gateway
+    A policy rejection can surface as a model error or, when the MCP Gateway
     rejects the request, as a transport error that a tool-call wrapper has already
     re-raised from, so the `__cause__` chain is walked rather than just the outermost
     error. MCP requests carry the same `x-portkey-metadata` as model requests, so they

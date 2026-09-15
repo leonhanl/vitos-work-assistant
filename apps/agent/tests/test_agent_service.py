@@ -431,6 +431,49 @@ def test_mcp_gateway_budget_exhausted_is_reported_as_budget_exhausted(
     assert "code=gateway_budget_exhausted status=412 source=mcp" in record.getMessage()
 
 
+def test_llm_guardrail_block_is_reported_without_gateway_details(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The SDK keeps error fields in ModelHTTPError.body; hook_results is only
+    # available on the underlying HTTP response, so classification uses HTTP 446.
+    error = ModelHTTPError(
+        status_code=446,
+        model_name="deepseek-v4-pro",
+        body={
+            "message": (
+                "The guardrail checks defined in the config failed. "
+                "You can find more information in the `hook_results` object."
+            ),
+            "type": "hooks_failed",
+            "param": None,
+            "code": None,
+        },
+    )
+
+    with caplog.at_level(logging.WARNING, logger="work_assistant.agent"):
+        event = _run_error(error)
+
+    assert event.code == "gateway_guardrail_blocked"
+    assert "blocked by the corporate security policy" in event.message
+    assert "hook_results" not in event.message
+    assert "hooks_failed" not in event.message
+    record = next(
+        record for record in caplog.records if record.name == "work_assistant.agent"
+    )
+    assert record.levelno == logging.WARNING
+    assert "code=gateway_guardrail_blocked status=446 source=llm" in record.getMessage()
+    assert record.exc_info is not None
+    assert "hooks_failed" in caplog.text
+
+
+def test_other_model_http_errors_are_not_reported_as_guardrail_blocks() -> None:
+    event = _run_error(
+        ModelHTTPError(status_code=500, model_name="deepseek-v4-pro")
+    )
+
+    assert event.code == "agent_execution_failed"
+
+
 def test_rate_limit_wrapped_by_a_jira_tool_call_is_still_reported_as_a_rate_limit() -> (
     None
 ):
