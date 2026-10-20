@@ -47,6 +47,38 @@ services:
     ports:
       - "${WEB_PORT:-5173}:80"
 
+  redteam-bridge:
+    profiles: ["redteam"]
+    build:
+      context: .
+      dockerfile: apps/redteam-bridge/Dockerfile
+    env_file:
+      - path: ./apps/redteam-bridge/.env
+        required: false
+    depends_on:
+      agent:
+        condition: service_healthy
+    init: true
+    ports:
+      - "${REDTEAM_BIND_ADDRESS:-127.0.0.1}:${REDTEAM_PORT:-8081}:8080"
+    volumes:
+      - redteam-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
 secrets:
   web_env:
     file: ./apps/web/.env
+
+volumes:
+  redteam-data:

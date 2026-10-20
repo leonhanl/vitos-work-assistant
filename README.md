@@ -71,11 +71,17 @@ permission，因此普通用户登录时不应看到 **Permissions requested** �
 vitos-work-assistant/
 ├── apps/
 │   ├── web/                  # Vite + Vanilla JS + MSAL Browser
-│   └── agent/                # FastAPI + Token A validation + Pydantic AI
+│   ├── agent/                # FastAPI + Token A validation + Pydantic AI
+│   └── redteam-bridge/       # 可选：AIRS REST 接入、设备码授权与用户 Token 缓存
 └── services/
     ├── jira-mcp-http/         # Jira MCP HTTP service 配置与启动文档
     └── salesforce-mcp-http/   # 占位；即将实现
 ```
+
+Prisma AIRS AI Red Teaming 可使用独立的
+[`redteam-bridge`](apps/redteam-bridge/README.md)。它提供 API Key 保护的 REST 入口，
+由测试用户提前完成设备码登录，再携带该用户的 Token A 调用下面现有的 `/chat`，
+保留原来的 SSO、OBO、Agent、Skills 与 MCP 权限链路。默认 Compose 启动不包含该服务。
 
 API endpoints：
 
@@ -411,16 +417,19 @@ Vite proxy 会显式删除 `/api`，所以本地开发不需要 FastAPI CORS。`
 ### 一键启动本地手工测试环境
 
 确认独立 MCP 已经运行，并完成本仓库的 Python、前端依赖、`apps/agent/.env` 和
-`apps/web/.env` 配置后，可在仓库根目录运行：
+`apps/web/.env` 配置，以及 [Bridge 本地配置与依赖](apps/redteam-bridge/README.md#6-本地开发与测试)
+后，可在仓库根目录运行：
 
 ```bash
 ./scripts/start-local.sh
 ```
 
-脚本会按 `Agent` → `Web` 的顺序启动，并等待 Agent 就绪后再启动 Web。每次启动会清除
-`logs/` 下的旧 `.log` 文件，新日志分别写入 `agent.log` 和 `web.log`。按 `Ctrl+C` 可停止
-这两个服务；独立 MCP 的生命周期仍由它自己的仓库或部署平台管理。该脚本只拉起本仓库的
-手工测试环境，不执行自动化测试。
+脚本会按 `Agent` → `Web` → `Red Team Bridge` 的顺序启动，并逐个等待服务就绪。
+Bridge 使用自己的 `.venv` 和 `.env`，监听 `127.0.0.1:8081`；首次聊天前需按 Bridge
+文档完成设备码授权。每次启动会清除 `logs/` 下的旧 `.log` 文件，新日志分别写入
+`agent.log`、`web.log` 和 `redteam-bridge.log`。按 `Ctrl+C` 可停止这三个服务；独立
+MCP 的生命周期仍由它自己的仓库或部署平台管理。该脚本只拉起本仓库的手工测试环境，
+不自动执行设备码登录或自动化测试。
 
 ### 使用 Docker Compose 启动 Web 与 Agent
 

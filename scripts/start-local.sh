@@ -8,9 +8,12 @@ VENV_DIR="${ROOT_DIR}/.venv"
 
 AGENT_ENV="${ROOT_DIR}/apps/agent/.env"
 WEB_ENV="${ROOT_DIR}/apps/web/.env"
+BRIDGE_DIR="${ROOT_DIR}/apps/redteam-bridge"
+BRIDGE_ENV="${BRIDGE_DIR}/.env"
 
 AGENT_LOG="${LOG_DIR}/agent.log"
 WEB_LOG="${LOG_DIR}/web.log"
+BRIDGE_LOG="${LOG_DIR}/redteam-bridge.log"
 
 PIDS=""
 
@@ -92,16 +95,35 @@ start_web() {
   wait_for_url "Web" "http://localhost:5173" "$pid" "$WEB_LOG"
 }
 
+start_bridge() {
+  (
+    cd "$BRIDGE_DIR"
+    set -a
+    # shellcheck disable=SC1090
+    source "$BRIDGE_ENV"
+    set +a
+    export PYTHONUNBUFFERED=1
+    exec "$BRIDGE_DIR/.venv/bin/python" -m uvicorn redteam_bridge.app:app \
+      --host 127.0.0.1 --port 8081 --workers 1
+  ) >>"$BRIDGE_LOG" 2>&1 &
+  local pid=$!
+  PIDS="${PIDS} ${pid}"
+  printf '正在启动 Red Team Bridge（PID %s）...\n' "$pid"
+  wait_for_url "Red Team Bridge" "http://127.0.0.1:8081/health" "$pid" "$BRIDGE_LOG"
+}
+
 require_file "$AGENT_ENV"
 require_file "$WEB_ENV"
+require_file "$BRIDGE_ENV"
 [[ -x "$VENV_DIR/bin/python" ]] || fail "未找到 ${VENV_DIR}/bin/python，请先创建并安装 Python 虚拟环境。"
+[[ -x "$BRIDGE_DIR/.venv/bin/python" ]] || fail "未找到 Bridge 虚拟环境，请先在 apps/redteam-bridge 下运行 uv sync --extra dev --frozen。"
 command -v npm >/dev/null 2>&1 || fail "未找到 npm，请先安装 Node.js/npm。"
 command -v curl >/dev/null 2>&1 || fail "未找到 curl。"
 [[ -d "$ROOT_DIR/apps/web/node_modules" ]] || fail "前端依赖尚未安装，请先在 apps/web 下运行 npm install。"
 
 mkdir -p "$LOG_DIR"
 find "$LOG_DIR" -maxdepth 1 -type f -name '*.log' -delete
-touch "$AGENT_LOG" "$WEB_LOG"
+touch "$AGENT_LOG" "$WEB_LOG" "$BRIDGE_LOG"
 printf '旧日志已清除：%s\n' "$LOG_DIR"
 
 trap stop_services EXIT
@@ -110,10 +132,12 @@ trap 'exit 143' TERM
 
 start_agent
 start_web
+start_bridge
 
 printf '\n本地手工测试环境已启动。\n'
 printf 'Web:   http://localhost:5173\n'
 printf 'Agent: http://127.0.0.1:8000\n'
+printf 'Bridge: http://127.0.0.1:8081/redteam/chat\n'
 printf 'MCP:   使用 apps/agent/.env 中配置的外部 M365_MCP_URL\n'
 printf '日志:  %s\n' "$LOG_DIR"
 printf '按 Ctrl+C 停止全部服务。\n\n'

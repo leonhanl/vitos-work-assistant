@@ -13,4 +13,6 @@
 apps/web/node_modules/
 apps/web/dist/
 apps/agent/skills/
+apps/redteam-bridge/data/
+**/msal_token_cache.json*
 logs/
