@@ -345,6 +345,7 @@ class AgentService:
             """Give this run an M365 MCP connection authenticated as its user."""
             return MCPToolset(
                 str(settings.m365_mcp_url),
+                init_timeout=30,
                 auth=ctx.deps.token_m,
                 headers={
                     "x-portkey-api-key": portkey_api_key,
@@ -359,6 +360,7 @@ class AgentService:
             """Give this run a policy-constrained Jira MCP connection."""
             base_toolset = MCPToolset(
                 str(settings.jira_mcp_url),
+                init_timeout=30,
                 id="jira-service-desk",
                 headers={
                     "x-portkey-api-key": portkey_api_key,
