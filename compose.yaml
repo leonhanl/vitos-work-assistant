@@ -45,7 +45,7 @@ services:
         condition: service_healthy
     init: true
     ports:
-      - "${WEB_PORT:-5173}:80"
+      - "0.0.0.0:${WEB_PORT:-5173}:80"
 
   redteam-bridge:
     profiles: ["redteam"]
@@ -60,7 +60,7 @@ services:
         condition: service_healthy
     init: true
     ports:
-      - "${REDTEAM_BIND_ADDRESS:-127.0.0.1}:${REDTEAM_PORT:-8081}:8080"
+      - "0.0.0.0:${REDTEAM_PORT:-8080}:8080"
     volumes:
       - redteam-data:/data
     healthcheck:

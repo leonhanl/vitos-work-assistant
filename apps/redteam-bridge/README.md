@@ -312,10 +312,9 @@ Agent 返回审批 interrupt 时，响应为 HTTP 200，`status` 为 `approval_r
 7. 在 Advanced Configurations 配置实际限流、拦截响应：限流状态 429；Guardrails / Content
    Filters 状态 446。预算错误 412 和审批 409 需与安全拦截区分。
 
-默认端口只绑定主机 `127.0.0.1:8081`。需要通过你现有的 HTTPS 反向代理将上述路径发布给
+Docker Compose 默认将端口绑定到主机 `0.0.0.0:8080`。需要通过你现有的 HTTPS 反向代理将上述路径发布给
 AIRS，或使用已有的 Network Channel 让 AIRS 能到达该服务。后者仅提供网络连通，
-**不使用 Custom Target Adapter**。若反向代理在另一台机器，可在仓库根 `.env` 设置
-`REDTEAM_BIND_ADDRESS` 为代理可达的主机接口；不要把 localhost URL 直接填给云端 AIRS。
+**不使用 Custom Target Adapter**。不要把 localhost URL 直接填给云端 AIRS。
 
 Volume 包含用户刷新凭据和内部文档 / 对话数据，不提交到 Git，不放进镜像。
 API Key 持有者可通过此服务以固定测试用户运行 Agent，因此只将该凭据配置给相应测试任务。
