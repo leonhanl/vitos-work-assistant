@@ -48,7 +48,6 @@ services:
       - "0.0.0.0:${WEB_PORT:-5173}:80"
 
   redteam-bridge:
-    profiles: ["redteam"]
     build:
       context: .
       dockerfile: apps/redteam-bridge/Dockerfile

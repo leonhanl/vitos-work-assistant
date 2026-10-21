@@ -200,15 +200,16 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
 | `REDTEAM_REQUEST_TIMEOUT` | 上游 HTTP 超时，默认 120 秒；AIRS 和反向代理也应允许足够的请求时间 |
 
 ```bash
-docker compose --profile redteam build redteam-bridge
+docker compose build
 ```
 
-`redteam` 是可选 profile，原有 `docker compose up` 不启动接入服务。
+默认 `docker compose build` 和 `docker compose up` 会一起构建、启动 Agent、Web 与
+Red Team Bridge。仅需重新构建 Bridge 时，运行 `docker compose build redteam-bridge`。
 
 ## 3. 首次授权
 
 ```bash
-docker compose --profile redteam run --rm --no-deps redteam-bridge redteam-bridge-login
+docker compose run --rm --no-deps redteam-bridge redteam-bridge-login
 ```
 
 命令会显示 Microsoft 登录网址和设备码。在**你自己电脑的浏览器**打开网址并输入设备码，
@@ -226,7 +227,7 @@ Access Token 到期时，MSAL 使用 Refresh Token 静默续期。
 ## 4. 启动与 REST 接口
 
 ```bash
-docker compose --profile redteam up -d redteam-bridge
+docker compose up -d
 curl http://127.0.0.1:8081/health
 ```
 

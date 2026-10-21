@@ -72,7 +72,7 @@ vitos-work-assistant/
 ├── apps/
 │   ├── web/                  # Vite + Vanilla JS + MSAL Browser
 │   ├── agent/                # FastAPI + Token A validation + Pydantic AI
-│   └── redteam-bridge/       # 可选：AIRS REST 接入、设备码授权与用户 Token 缓存
+│   └── redteam-bridge/       # AIRS REST 接入、设备码授权与用户 Token 缓存
 └── services/
     ├── jira-mcp-http/         # Jira MCP HTTP service 配置与启动文档
     └── salesforce-mcp-http/   # 占位；即将实现
@@ -81,7 +81,7 @@ vitos-work-assistant/
 Prisma AIRS AI Red Teaming 可使用独立的
 [`redteam-bridge`](apps/redteam-bridge/README.md)。它提供 API Key 保护的 REST 入口，
 由测试用户提前完成设备码登录，再携带该用户的 Token A 调用下面现有的 `/chat`，
-保留原来的 SSO、OBO、Agent、Skills 与 MCP 权限链路。默认 Compose 启动不包含该服务。
+保留原来的 SSO、OBO、Agent、Skills 与 MCP 权限链路。默认 Compose 会一起构建并启动该服务。
 
 API endpoints：
 
@@ -431,10 +431,11 @@ Bridge 使用自己的 `.venv` 和 `.env`，监听 `127.0.0.1:8081`；首次聊�
 MCP 的生命周期仍由它自己的仓库或部署平台管理。该脚本只拉起本仓库的手工测试环境，
 不自动执行设备码登录或自动化测试。
 
-### 使用 Docker Compose 启动 Web 与 Agent
+### 使用 Docker Compose 启动 Web、Agent 与 Red Team Bridge
 
-Docker 运行方式不使用 `scripts/start-local.sh`。确认 `apps/agent/.env` 和
-`apps/web/.env` 已配置后，先在仓库根目录构建两个 container image：
+Docker 运行方式不使用 `scripts/start-local.sh`。确认 `apps/agent/.env`、
+`apps/web/.env` 和 [Bridge 配置](apps/redteam-bridge/README.md#2-配置与构建)
+`apps/redteam-bridge/.env` 已配置后，先在仓库根目录构建三个 container image：
 
 ```bash
 docker compose build
@@ -460,9 +461,11 @@ WEB_PORT=80
 docker compose --env-file .env.staging up -d
 ```
 
-Compose 会启动两个容器：Nginx Web 默认暴露在 `http://localhost:5173`，Agent 只在
+Compose 会启动三个容器：Nginx Web 默认暴露在 `http://localhost:5173`，Agent 只在
 Compose 内部网络监听 `8000`。Nginx 将 `/api/*` 转发到 Agent，并在转发时删除 `/api`
 前缀。Agent 的运行时配置来自 `apps/agent/.env`，包括其中配置的 `M365_MCP_URL`。
+Red Team Bridge 默认暴露在 `http://localhost:8080`，可通过 `REDTEAM_PORT` 调整宿主机
+端口；首次使用前需完成 [Bridge 设备码授权](apps/redteam-bridge/README.md#3-首次授权)。
 
 Skills 不会复制进 Agent 镜像。Compose 将 `SKILLS_ARTIFACT_PATH` 指向的版本化 artifact
 只读挂载到 `/opt/work-assistant/skills`，并将 `SKILLS_ARTIFACT_VERSION` 传给 Agent 记录。
