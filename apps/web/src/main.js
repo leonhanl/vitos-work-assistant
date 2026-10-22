@@ -4,10 +4,11 @@ import { buildResumeArray, randomUUID } from "@ag-ui/client";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
-import { ApiError, createChatAgent, getMe, submitFeedback } from "./api.js";
+import { ApiError, createChatAgent, submitFeedback } from "./api.js";
 import { initializeAuth, login, logout } from "./auth.js";
 
 const JIRA_CREATE_TOOL = "jira_create_customer_request";
+const GUARDRAIL_STORAGE_KEY = "work-assistant.guardrails-enabled";
 
 marked.use({ gfm: true, breaks: true });
 
@@ -29,15 +30,35 @@ const elements = {
   signInError: document.querySelector("#sign-in-error"),
   accountName: document.querySelector("#account-name"),
   accountUsername: document.querySelector("#account-username"),
-  apiIdentity: document.querySelector("#api-identity"),
   messages: document.querySelector("#messages"),
   chatForm: document.querySelector("#chat-form"),
   messageInput: document.querySelector("#message-input"),
   sendButton: document.querySelector("#send-button"),
   chatError: document.querySelector("#chat-error"),
+  guardrailSwitch: document.querySelector("#guardrail-switch"),
+  guardrailStatus: document.querySelector("#guardrail-status"),
+  guardrailDialog: document.querySelector("#guardrail-dialog"),
+  scenarioList: document.querySelector("#scenario-list"),
+  scenarioError: document.querySelector("#scenario-error"),
 };
 
 let chatAgent = null;
+const guardrailsEnabled = sessionStorage.getItem(GUARDRAIL_STORAGE_KEY) === "true";
+elements.guardrailSwitch.checked = guardrailsEnabled;
+elements.guardrailStatus.textContent = guardrailsEnabled ? "ON" : "OFF";
+
+elements.guardrailSwitch.addEventListener("change", () => {
+  // Keep the current mode until the user confirms the reload.
+  elements.guardrailSwitch.checked = guardrailsEnabled;
+  elements.guardrailDialog.returnValue = "";
+  elements.guardrailDialog.showModal();
+});
+
+elements.guardrailDialog.addEventListener("close", () => {
+  if (elements.guardrailDialog.returnValue !== "continue") return;
+  sessionStorage.setItem(GUARDRAIL_STORAGE_KEY, String(!guardrailsEnabled));
+  window.location.reload();
+});
 
 elements.signInButton.addEventListener("click", async () => {
   setButtonBusy(elements.signInButton, true, "Redirecting…");
@@ -64,6 +85,10 @@ elements.signOutButton.addEventListener("click", async () => {
 elements.chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const message = elements.messageInput.value.trim();
+  await sendMessage(message);
+});
+
+async function sendMessage(message) {
   if (!message || !chatAgent || chatAgent.isRunning || chatAgent.pendingInterrupts.length) {
     return;
   }
@@ -73,7 +98,7 @@ elements.chatForm.addEventListener("submit", async (event) => {
   elements.messageInput.value = "";
   chatAgent.addMessage({ id: randomUUID(), role: "user", content: message });
   await runChat();
-});
+}
 
 start();
 
@@ -86,7 +111,7 @@ async function start() {
     }
 
     showSignedIn(account);
-    await confirmApiIdentity();
+    await loadScenarios();
   } catch (error) {
     showSignedOut();
     const isConfigurationError = error instanceof Error && (
@@ -97,6 +122,48 @@ async function start() {
       ? error.message
       : "Authentication could not be initialized. Check the frontend configuration.";
     showError(elements.signInError, message);
+  }
+}
+
+async function loadScenarios() {
+  try {
+    const response = await fetch("/config/scenarios.json", { cache: "no-store" });
+    if (!response.ok) throw new Error("Could not load scenarios.json.");
+    const config = await response.json();
+    if (!Array.isArray(config?.scenarios) || !config.scenarios.every((scenario) => (
+      typeof scenario?.title === "string" && scenario.title.trim() &&
+      Array.isArray(scenario.prompts) && scenario.prompts.every((prompt) => (
+        typeof prompt?.title === "string" && prompt.title.trim() &&
+        typeof prompt.message === "string" && prompt.message.trim() &&
+        prompt.message.length <= 20000
+      ))
+    ))) {
+      throw new Error("Invalid scenario configuration.");
+    }
+
+    elements.scenarioList.replaceChildren();
+    for (const scenario of config.scenarios) {
+      const group = document.createElement("details");
+      group.className = "scenario-group";
+      group.open = true;
+      const heading = document.createElement("summary");
+      heading.textContent = scenario.title;
+      group.append(heading);
+      for (const prompt of scenario.prompts) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "preset-question";
+        button.textContent = prompt.title;
+        button.title = prompt.message;
+        button.addEventListener("click", () => sendMessage(prompt.message.trim()));
+        group.append(button);
+      }
+      elements.scenarioList.append(group);
+    }
+    setChatBusy(Boolean(chatAgent?.isRunning));
+  } catch {
+    elements.scenarioList.replaceChildren();
+    showError(elements.scenarioError, "Could not load scenarios. Check scenarios.json and refresh the page.");
   }
 }
 
@@ -123,19 +190,6 @@ function showSignedIn(account) {
   elements.messageInput.focus();
 }
 
-async function confirmApiIdentity() {
-  elements.apiIdentity.textContent = "Confirming API identity…";
-  try {
-    const user = await getMe();
-    elements.apiIdentity.textContent = user.username
-      ? `API authenticated as ${user.username}`
-      : "API authentication confirmed";
-  } catch (error) {
-    elements.apiIdentity.textContent = "";
-    showError(elements.chatError, userMessageFor(error));
-  }
-}
-
 async function runChat(parameters = {}) {
   if (!chatAgent || chatAgent.isRunning) return;
   setChatBusy(true);
@@ -146,7 +200,10 @@ async function runChat(parameters = {}) {
   let traceId = null;
 
   try {
-    await chatAgent.runAgent(parameters, {
+    await chatAgent.runAgent({
+      ...parameters,
+      forwardedProps: { ...parameters.forwardedProps, guardrails_enabled: guardrailsEnabled },
+    }, {
       onTextMessageContentEvent({ event, textMessageBuffer }) {
         hasText = true;
         replacePendingMessage(pendingMessage, `${textMessageBuffer}${event.delta}`);
@@ -429,6 +486,10 @@ function setChatBusy(busy) {
   elements.messageInput.disabled = blocked;
   elements.sendButton.disabled = blocked;
   elements.sendButton.textContent = busy ? "Thinking…" : "Send";
+  elements.guardrailSwitch.disabled = blocked;
+  elements.scenarioList.querySelectorAll("button").forEach((button) => {
+    button.disabled = blocked;
+  });
 }
 
 function setButtonBusy(button, busy, label) {

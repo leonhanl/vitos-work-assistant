@@ -20,6 +20,8 @@ class Settings(BaseSettings):
 
     portkey_base_url: AnyHttpUrl = Field(validation_alias="PORTKEY_BASE_URL")
     portkey_api_key: SecretStr = Field(validation_alias="PORTKEY_API_KEY")
+    portkey_config_guardrail_on: str = Field(validation_alias="PORTKEY_CONFIG_GUARDRAIL_ON")
+    portkey_config_guardrail_off: str = Field(validation_alias="PORTKEY_CONFIG_GUARDRAIL_OFF")
     llm_model: str = Field(validation_alias="LLM_MODEL")
     skills_directory: Path = Field(validation_alias="SKILLS_DIRECTORY")
     skills_version: str = Field(validation_alias="SKILLS_VERSION")
@@ -52,6 +54,8 @@ class Settings(BaseSettings):
     jira_service_desk_id: str = Field(validation_alias="JIRA_SERVICE_DESK_ID")
 
     @field_validator(
+        "portkey_config_guardrail_on",
+        "portkey_config_guardrail_off",
         "llm_model",
         "skills_version",
         "entra_required_scope",

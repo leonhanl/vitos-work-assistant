@@ -10,10 +10,6 @@ export class ApiError extends Error {
   }
 }
 
-export async function getMe() {
-  return apiRequest("/api/me");
-}
-
 export async function submitFeedback(traceId, value) {
   return apiRequest("/api/feedback", {
     method: "POST",

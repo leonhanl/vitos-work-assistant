@@ -7,6 +7,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY apps/web/index.html apps/web/redirect.html apps/web/vite.config.js ./
 COPY apps/web/src ./src
+COPY apps/web/public ./public
 
 RUN --mount=type=secret,id=web_env,target=/app/.env,required=true \
     npm run build

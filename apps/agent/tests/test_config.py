@@ -15,6 +15,8 @@ SKILLS_DIRECTORY = Path(__file__).resolve().parents[1] / "skills"
 def _set_required_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PORTKEY_BASE_URL", "https://api.portkey.example/v1")
     monkeypatch.setenv("PORTKEY_API_KEY", "test-portkey-key")
+    monkeypatch.setenv("PORTKEY_CONFIG_GUARDRAIL_ON", "pc-test-on")
+    monkeypatch.setenv("PORTKEY_CONFIG_GUARDRAIL_OFF", "pc-test-off")
     monkeypatch.setenv("LLM_MODEL", "tool-model")
     monkeypatch.setenv("SKILLS_DIRECTORY", str(SKILLS_DIRECTORY))
     monkeypatch.setenv("SKILLS_VERSION", "test-version")
@@ -47,6 +49,8 @@ def test_llm_configuration_accepts_portkey_gateway(
     assert settings.skills_directory == SKILLS_DIRECTORY
     assert settings.skills_version == "test-version"
     assert settings.portkey_api_key.get_secret_value() == "test-portkey-key"
+    assert settings.portkey_config_guardrail_on == "pc-test-on"
+    assert settings.portkey_config_guardrail_off == "pc-test-off"
     assert str(settings.portkey_base_url).startswith(
         "https://api.portkey.example/v1"
     )
@@ -81,9 +85,21 @@ def test_m365_streamable_http_endpoint_is_configurable(
     assert str(settings.m365_mcp_url) == "http://m365.internal:9000/custom-mcp"
 
 
-def test_portkey_api_key_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("name", [
+    "PORTKEY_API_KEY", "PORTKEY_CONFIG_GUARDRAIL_ON", "PORTKEY_CONFIG_GUARDRAIL_OFF",
+])
+def test_portkey_settings_are_required(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
     _set_required_configuration(monkeypatch)
-    monkeypatch.delenv("PORTKEY_API_KEY", raising=False)
+    monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+@pytest.mark.parametrize("name", ["PORTKEY_CONFIG_GUARDRAIL_ON", "PORTKEY_CONFIG_GUARDRAIL_OFF"])
+def test_portkey_config_must_not_be_blank(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    _set_required_configuration(monkeypatch)
+    monkeypatch.setenv(name, "  ")
 
     with pytest.raises(ValidationError):
         Settings()

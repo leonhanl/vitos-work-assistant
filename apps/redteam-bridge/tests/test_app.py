@@ -65,6 +65,7 @@ def test_rest_response_and_user_token_forwarding(settings):
         body = json.loads(request.content)
         assert body["messages"][0]["content"] == "hello"
         assert body["tools"] == []
+        assert body["forwardedProps"] == {"guardrails_enabled": False}
         assert body["threadId"] and body["runId"]
         return sse(answer("Hello Alice"))
 
@@ -77,6 +78,31 @@ def test_rest_response_and_user_token_forwarding(settings):
     assert result["trace_id"] == "trace-123"
     assert result["interrupts"] == []
     assert "token" not in response.text
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_guardrail_mode_is_forwarded(settings, enabled):
+    def upstream(request):
+        body = json.loads(request.content)
+        assert body["forwardedProps"] == {"guardrails_enabled": enabled}
+        return sse(answer())
+
+    with api(settings, upstream) as client:
+        response = client.post("/redteam/chat", json={
+            "prompt": "hello", "guardrails_enabled": enabled,
+        })
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize("invalid_mode", ["false", 0, None])
+def test_guardrail_mode_requires_a_boolean(settings, invalid_mode):
+    calls = []
+    with api(settings, lambda request: calls.append(request) or sse(answer())) as client:
+        response = client.post("/redteam/chat", json={
+            "prompt": "hello", "guardrails_enabled": invalid_mode,
+        })
+    assert response.status_code == 422
+    assert not calls
 
 
 def test_tool_history_metadata_and_state_survive_restart(settings):

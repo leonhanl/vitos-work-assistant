@@ -28,6 +28,7 @@ class ChatRequest(BaseModel):
 
     prompt: str = Field(min_length=1)
     conversation_id: UUID | None = None
+    guardrails_enabled: bool = Field(default=False, strict=True)
 
     @field_validator("prompt")
     @classmethod
@@ -77,7 +78,8 @@ class Bridge:
                     json={
                         "threadId": conversation_id, "runId": str(uuid4()),
                         "state": run.state, "messages": run.messages,
-                        "tools": [], "context": [], "forwardedProps": {},
+                        "tools": [], "context": [],
+                        "forwardedProps": {"guardrails_enabled": chat.guardrails_enabled},
                     },
                 ) as response:
                     if response.status_code == 401:

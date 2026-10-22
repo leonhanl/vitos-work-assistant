@@ -338,6 +338,8 @@ uvicorn work_assistant.app:app --reload --host 127.0.0.1 --port 8000
 ```dotenv
 PORTKEY_BASE_URL=https://api.portkey.ai/v1
 PORTKEY_API_KEY=<Work Assistant service API key>
+PORTKEY_CONFIG_GUARDRAIL_ON=<saved Config ID with guardrails>
+PORTKEY_CONFIG_GUARDRAIL_OFF=<saved Config ID without those guardrails>
 LLM_MODEL=<tool-calling model>
 SKILLS_DIRECTORY=/absolute/path/to/work-assistant-skills
 SKILLS_VERSION=<immutable artifact version>
@@ -486,14 +488,13 @@ docker compose down
 
 ## 4. Alice / Bob 手工验证
 
-### Alice 登录与 `/me`
+### Alice 登录
 
 1. 打开 `http://localhost:5173`，点击 **Sign in with Microsoft**。
 2. 使用 Alice 登录。Alice 可以完成账号选择、密码、MFA 或 Conditional Access，但不应
    看到 **Permissions requested** 用户 consent 页面。
-3. 页面应显示 `account.name` / `account.username`，并轻量显示
-   `API authenticated as alice@...`。
-4. 浏览器实际调用 `GET /api/me`；后端返回 Alice 的 `oid`、tenant `tid`、username 与
+3. 页面右上方应显示 `account.name` / `account.username`。
+4. 如需单独排查 API 身份，可携带 Token A 调用 `GET /api/me`；后端返回 Alice 的 `oid`、tenant `tid`、username 与
    `groups`。`groups` 是映射后的组标签，仅在配置了
    [§1.4](#14-可选在-token-a-中包含-security-group) 时非空。
 
@@ -555,15 +556,74 @@ token validation。Claims 仍包含用户身份信息，因此不要在生产环
 3. `/me` 应满足 `Bob oid != Alice oid`、`Bob tid == Alice tid`，username 为 Bob；Bob
    也可以调用 `/chat`。
 
-## 5. 测试
+## 5. 预设问题与 guardrail 模式
+
+登录后的左侧栏按 scenario 展示预设问题。点击问题会在右侧显示完整内容并立即发送，
+与自由输入共用当前 conversation。Scenario 仅作展示分组；点击其他分组的问题不会
+切换或清除会话。需要开始新会话时，由演示者手动刷新页面。聊天历史不持久化。
+
+编辑 [`apps/web/public/config/scenarios.json`](apps/web/public/config/scenarios.json)
+即可调整分组、顺序、标题和实际发送的内容：
+
+```json
+{
+  "scenarios": [
+    {
+      "title": "VPN Support",
+      "prompts": [
+        {
+          "title": "Find the VPN guide",
+          "message": "Find the official instructions for connecting to the company VPN."
+        }
+      ]
+    }
+  ]
+}
+```
+
+页面在加载时请求 `/config/scenarios.json`，不使用浏览器缓存；配置错误会显示在侧栏，
+自由输入仍可使用。Docker Compose 只读挂载整个配置目录，修改 JSON 后刷新页面即可，
+无需重新构建镜像。JSON 中的标题和问题均为非空字符串，问题最长 20,000 字符。
+
+Guardrails 首次打开默认为 **OFF**，当前标签页的选择保存在 `sessionStorage`。
+切换开关先显示 **Cancel / Continue** 确认框：取消保留模式和对话，继续则保存新模式、
+刷新页面并创建新 conversation；不会重发旧问题。刷新只清除聊天上下文，不撤销已完成
+的工单等业务操作，也不清除 Microsoft 登录缓存。生成回答或等待工单审批时，问题按钮
+和开关暂时禁用。
+
+在 `apps/agent/.env` 中分别配置 `PORTKEY_CONFIG_GUARDRAIL_ON` 和
+`PORTKEY_CONFIG_GUARDRAIL_OFF`。两项均必填且不可为空；示例值是占位符，请替换为
+实际保存的 Config ID，并在 Portkey API key 设置中允许 **Config Override**。
+两种模式都会显式发送对应的 `x-portkey-config`，不依赖 API key 的 Default Config。
+修改 ENV 后重启本地 Agent；Docker 部署使用 `docker compose up -d --force-recreate agent`
+重新加载环境变量。Config 只作用于 LLM 请求，MCP、OBO 和 Jira 审批保持原有行为；
+Portkey 中独立强制执行的组织或 workspace guardrails 需在网关侧另行确认。
+
+Web 的普通消息、预设问题和审批 resume 均通过现有 `/chat` 请求携带：
+
+```json
+{"forwardedProps": {"guardrails_enabled": false}}
+```
+
+Agent 在未提供模式时默认 OFF，显式提供时只接受 JSON 布尔值。模式只决定本次 run
+使用的 Config，不修改共享 Agent。Red Team Bridge 支持同名 REST 参数并转发到这里，
+不读取 Web 开关，也不保存模式；多轮测试请在每次请求中传入所需模式。切换测试模式时，
+省略旧的 `conversation_id` 开始新会话，避免混入旧上下文。
+
+## 6. 测试
 
 ```bash
 cd apps/web
+npm test
 npm run build
 
 cd ../..
 python -m pytest apps/agent/tests
 ```
+
+`npm test` 使用 Node 内置测试工具和 DOM/auth 测试替身，覆盖问题自动发送、跨分组沿用
+同一 conversation、开关确认/取消、刷新后模式保留、审批 resume 和配置加载错误；不访问
+真实认证或后端。前端视觉布局及真实 Portkey 效果仍需手动确认。
 
 后端认证测试使用本地 RSA signing key，不访问真实 Entra、JWKS、Graph 或 LLM，覆盖
 匿名 health、缺 token、无效 token、错误 audience / issuer / tenant、缺 scope，以及

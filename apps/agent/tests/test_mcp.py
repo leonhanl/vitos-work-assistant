@@ -158,6 +158,8 @@ def test_m365_and_jira_mcp_use_their_distinct_authentication_models(
         jira_mcp_url=f"http://127.0.0.1:{jira_port}/mcp",
         jira_service_desk_id="3",
         portkey_api_key=SecretStr("test-portkey-key"),
+        portkey_config_guardrail_on="pc-test-on",
+        portkey_config_guardrail_off="pc-test-off",
     )
     service = AgentService(
         settings,
@@ -307,6 +309,8 @@ def test_jira_create_requires_approval_and_forces_trusted_arguments(
         jira_mcp_url=f"http://127.0.0.1:{jira_port}/mcp",
         jira_service_desk_id="3",
         portkey_api_key=SecretStr("test-portkey-key"),
+        portkey_config_guardrail_on="pc-test-on",
+        portkey_config_guardrail_off="pc-test-off",
     )
     service = AgentService(
         settings,
@@ -428,6 +432,8 @@ def test_jira_read_tool_does_not_require_approval(tmp_path: Path) -> None:
         jira_mcp_url=f"http://127.0.0.1:{jira_port}/mcp",
         jira_service_desk_id="3",
         portkey_api_key=SecretStr("test-portkey-key"),
+        portkey_config_guardrail_on="pc-test-on",
+        portkey_config_guardrail_off="pc-test-off",
     )
     service = AgentService(settings, TokenAcquirer(), model=FunctionModel(model_function))
 

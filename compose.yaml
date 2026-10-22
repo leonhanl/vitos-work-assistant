@@ -44,6 +44,13 @@ services:
       agent:
         condition: service_healthy
     init: true
+    volumes:
+      - type: bind
+        source: ./apps/web/public/config
+        target: /usr/share/nginx/html/config
+        read_only: true
+        bind:
+          create_host_path: false
     ports:
       - "0.0.0.0:${WEB_PORT:-5173}:80"
 

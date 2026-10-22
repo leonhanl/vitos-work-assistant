@@ -264,6 +264,23 @@ curl http://127.0.0.1:8081/redteam/chat \
 }
 ```
 
+### Guardrail 模式
+
+`guardrails_enabled` 是可选的 JSON 布尔值，默认 **false / OFF**：
+
+```json
+{
+  "prompt": "How do I connect to VPN?",
+  "guardrails_enabled": true
+}
+```
+
+Bridge 将模式放入 Agent `/chat` 的 `forwardedProps.guardrails_enabled`，由 Agent
+根据自己的 ENV 选择 ON/OFF 对应的 Portkey Config。Bridge 不需要 Config ID 或 Portkey
+凭据，也不读取 Web 的开关。模式不会随 conversation 保存；多轮请求中每次都应传入
+需要的模式，省略则为 OFF。切换模式时请省略 `conversation_id` 开始新会话；Bridge
+不自动清理或判断模式变化。原有测试用户身份、OBO、工具和人工审批边界保持不变。
+
 服务保存 AG-UI 的消息、工具参数与结果、reasoning 元数据和状态快照，作为下一轮上下文。
 不同对话可并发，同一个对话串行执行。SQLite 数据同样在 Volume 中，容器重启后可继续。
 目前仅支持**一个服务进程、一个副本**；容器使用一个 Uvicorn worker。

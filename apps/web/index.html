@@ -39,25 +39,57 @@
           </div>
         </header>
 
-        <div id="api-identity" class="identity-note" aria-live="polite"></div>
+        <div class="workspace-body">
+          <aside class="sidebar" aria-label="Scenarios and guardrails">
+            <div class="guardrail-control">
+              <label class="guardrail-label" for="guardrail-switch">
+                <span>Guardrails <strong id="guardrail-status">OFF</strong></span>
+                <span class="switch">
+                  <input id="guardrail-switch" type="checkbox" role="switch" />
+                  <span class="switch-track" aria-hidden="true"></span>
+                </span>
+              </label>
+              <p>Changing the mode reloads the page and clears the conversation.</p>
+            </div>
+            <nav aria-label="Preset questions">
+              <h2 class="sidebar-heading">Scenarios</h2>
+              <p class="sidebar-hint">Click a question to send it. Refresh the page to start a new conversation.</p>
+              <p id="scenario-error" class="error-message" role="alert" hidden></p>
+              <div id="scenario-list">Loading scenarios…</div>
+            </nav>
+          </aside>
 
-        <section id="messages" class="messages" aria-live="polite" aria-label="Conversation"></section>
+          <div class="chat-panel">
+            <section id="messages" class="messages" aria-live="polite" aria-label="Conversation"></section>
 
-        <p id="chat-error" class="error-banner" role="alert" hidden></p>
+            <p id="chat-error" class="error-banner" role="alert" hidden></p>
 
-        <form id="chat-form" class="composer">
-          <label class="sr-only" for="message-input">Ask something</label>
-          <textarea
-            id="message-input"
-            name="message"
-            rows="1"
-            maxlength="20000"
-            placeholder="Ask something…"
-            required
-          ></textarea>
-          <button id="send-button" class="primary-button" type="submit">Send</button>
-        </form>
+            <form id="chat-form" class="composer">
+              <label class="sr-only" for="message-input">Ask something</label>
+              <textarea
+                id="message-input"
+                name="message"
+                rows="1"
+                maxlength="20000"
+                placeholder="Ask something…"
+                required
+              ></textarea>
+              <button id="send-button" class="primary-button" type="submit">Send</button>
+            </form>
+          </div>
+        </div>
       </section>
+
+      <dialog id="guardrail-dialog" aria-labelledby="guardrail-dialog-title" aria-describedby="guardrail-dialog-description">
+        <form method="dialog">
+          <h2 id="guardrail-dialog-title">Change guardrail mode?</h2>
+          <p id="guardrail-dialog-description">Changing this setting will reload the page and clear the current conversation. Do you want to continue?</p>
+          <div class="dialog-actions">
+            <button class="secondary-button" value="cancel" autofocus>Cancel</button>
+            <button class="primary-button" value="continue">Continue</button>
+          </div>
+        </form>
+      </dialog>
     </main>
 
     <script type="module" src="/src/main.js"></script>

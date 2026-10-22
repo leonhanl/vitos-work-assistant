@@ -73,6 +73,7 @@ class AgentRunDependencies:
     user_oid: str
     username: str | None
     jira_service_desk_id: str
+    portkey_config: str
     groups: tuple[str, ...] = ()
 
 
@@ -105,9 +106,12 @@ def _portkey_observability_headers(
 def _portkey_model_settings(
     ctx: RunContext[AgentRunDependencies],
 ) -> ModelSettings:
-    """Attach Portkey observability headers to every model request."""
+    """Attach Portkey config and observability headers to every model request."""
     return ModelSettings(
-        extra_headers=_portkey_observability_headers(ctx),
+        extra_headers={
+            **_portkey_observability_headers(ctx),
+            "x-portkey-config": ctx.deps.portkey_config,
+        },
     )
 
 
@@ -330,6 +334,8 @@ class AgentService:
     ) -> None:
         self._token_acquirer = token_acquirer
         self._jira_service_desk_id = settings.jira_service_desk_id
+        self._portkey_config_guardrail_on = settings.portkey_config_guardrail_on
+        self._portkey_config_guardrail_off = settings.portkey_config_guardrail_off
         portkey_api_key = settings.portkey_api_key.get_secret_value()
         self._agent = Agent(
             model or create_chat_model_client(settings),
@@ -386,10 +392,28 @@ class AgentService:
             extra={"user_oid": authenticated.user.oid},
         )
         try:
+            try:
+                body = await request.json()
+            except (ValueError, UnicodeDecodeError):
+                raise AgentServiceError(
+                    422, "invalid_chat_request", "The chat request must be valid JSON."
+                ) from None
+            props = body.get("forwardedProps", {}) if isinstance(body, dict) else None
+            guardrails_enabled = (
+                props.get("guardrails_enabled", False) if isinstance(props, dict) else None
+            )
+            if not isinstance(guardrails_enabled, bool):
+                raise AgentServiceError(
+                    422,
+                    "invalid_guardrail_mode",
+                    "forwardedProps.guardrails_enabled must be a boolean.",
+                )
             token_m = await self._token_acquirer.acquire_mcp_token(
                 authenticated.token_a
             )
-            deps = self._run_dependencies(token_m, authenticated)
+            deps = self._run_dependencies(
+                token_m, authenticated, guardrails_enabled=guardrails_enabled
+            )
             return await _LoggingAGUIAdapter.dispatch_request(
                 request,
                 agent=self._agent,
@@ -417,12 +441,19 @@ class AgentService:
         self,
         token_m: str,
         authenticated: AuthenticatedRequest,
+        *,
+        guardrails_enabled: bool = False,
     ) -> AgentRunDependencies:
         return AgentRunDependencies(
             token_m=token_m,
             user_oid=authenticated.user.oid,
             username=authenticated.user.username,
             jira_service_desk_id=self._jira_service_desk_id,
+            portkey_config=(
+                self._portkey_config_guardrail_on
+                if guardrails_enabled
+                else self._portkey_config_guardrail_off
+            ),
             groups=authenticated.user.groups,
         )
 

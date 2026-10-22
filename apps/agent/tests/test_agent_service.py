@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.ui.ag_ui import AGUIAdapter
 from pydantic_ai_harness.skills import Skills
+from starlette.requests import Request
 from starlette.responses import Response
 
 from work_assistant.agent import (
@@ -61,6 +63,8 @@ def _settings(tmp_path: Path) -> SimpleNamespace:
         jira_mcp_url="http://127.0.0.1:9998/mcp",
         jira_service_desk_id="3",
         portkey_api_key=SecretStr("test-portkey-key"),
+        portkey_config_guardrail_on="pc-test-on",
+        portkey_config_guardrail_off="pc-test-off",
     )
 
 
@@ -112,9 +116,16 @@ def test_skills_are_discovered_then_loaded_on_demand(tmp_path: Path) -> None:
     assert result.output == "done"
 
 
+@pytest.mark.parametrize("props,expected_config", [
+    ({}, "pc-test-off"),
+    ({"guardrails_enabled": False}, "pc-test-off"),
+    ({"guardrails_enabled": True}, "pc-test-on"),
+])
 def test_agent_service_exchanges_token_and_dispatches_with_per_run_dependencies(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    props: dict,
+    expected_config: str,
 ) -> None:
     class TokenAcquirer:
         def __init__(self) -> None:
@@ -138,7 +149,8 @@ def test_agent_service_exchanges_token_and_dispatches_with_per_run_dependencies(
         model=TestModel(custom_output_text="unused"),
     )
 
-    response = asyncio.run(service.dispatch_chat(SimpleNamespace(), _authenticated()))
+    request = SimpleNamespace(json=AsyncMock(return_value={"forwardedProps": props}))
+    response = asyncio.run(service.dispatch_chat(request, _authenticated()))
 
     assert response.body == b"stream"
     assert token_acquirer.seen == ["alice-token-a"]
@@ -147,6 +159,7 @@ def test_agent_service_exchanges_token_and_dispatches_with_per_run_dependencies(
     assert deps.user_oid == "alice"
     assert deps.username == "alice@example.com"
     assert deps.jira_service_desk_id == "3"
+    assert deps.portkey_config == expected_config
     assert "alice-token-m" not in repr(deps)
     assert captured["agent"] is service._agent
     assert captured["on_complete"] == service._completion_events
@@ -171,6 +184,7 @@ def test_portkey_headers_track_user_conversation_and_agent_run() -> None:
             user_oid=oid,
             username=username,
             jira_service_desk_id="3",
+            portkey_config="pc-test-on" if oid == "bob" else "pc-test-off",
         )
 
     async def run_test() -> None:
@@ -202,6 +216,9 @@ def test_portkey_headers_track_user_conversation_and_agent_run() -> None:
     asyncio.run(run_test())
 
     headers = [settings["extra_headers"] for settings in model_settings]
+    assert [header["x-portkey-config"] for header in headers] == [
+        "pc-test-off", "pc-test-off", "pc-test-on", "pc-test-off",
+    ]
     assert [header["x-portkey-trace-id"] for header in headers] == [
         "run-1",
         "run-2",
@@ -236,6 +253,99 @@ def test_portkey_headers_track_user_conversation_and_agent_run() -> None:
     assert "token" not in headers[0]["x-portkey-metadata"]
 
 
+@pytest.mark.parametrize("props,expected_config", [
+    ({}, "pc-test-off"),
+    ({"guardrails_enabled": True}, "pc-test-on"),
+])
+def test_ag_ui_stream_uses_the_requested_config(tmp_path: Path, props, expected_config):
+    headers = []
+
+    async def stream_function(messages, info):
+        headers.append(info.model_settings["extra_headers"])
+        yield "answer"
+
+    service = AgentService(
+        _settings(tmp_path),
+        SimpleNamespace(acquire_mcp_token=AsyncMock(return_value="token-m")),
+        model=FunctionModel(stream_function=stream_function),
+    )
+    body = {
+        "threadId": "thread-1", "runId": "run-1", "state": {},
+        "messages": [{"id": "m-1", "role": "user", "content": "hello"}],
+        "tools": [], "context": [], "forwardedProps": props,
+    }
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/chat",
+         "headers": [(b"accept", b"text/event-stream")]},
+        receive=AsyncMock(return_value={"type": "http.request", "body": json.dumps(body).encode()}),
+    )
+
+    async def run_test():
+        with service._agent.override(toolsets=[]):
+            response = await service.dispatch_chat(request, _authenticated())
+            assert response.status_code == 200
+            return "".join([chunk async for chunk in response.body_iterator])
+
+    stream = asyncio.run(run_test())
+    assert "RUN_FINISHED" in stream
+    assert "RUN_ERROR" not in stream
+    assert headers and all(header["x-portkey-config"] == expected_config for header in headers)
+
+
+@pytest.mark.parametrize("props", [
+    {"guardrails_enabled": "false"}, {"guardrails_enabled": 0},
+    {"guardrails_enabled": None}, None,
+])
+def test_invalid_guardrail_mode_is_rejected_before_obo(tmp_path: Path, props) -> None:
+    token_acquirer = SimpleNamespace(acquire_mcp_token=AsyncMock())
+    service = AgentService(
+        _settings(tmp_path), token_acquirer, model=TestModel(),
+    )
+    request = SimpleNamespace(json=AsyncMock(return_value={"forwardedProps": props}))
+
+    with pytest.raises(AgentServiceError) as raised:
+        asyncio.run(service.dispatch_chat(request, _authenticated()))
+
+    assert raised.value.status_code == 422
+    assert raised.value.code == "invalid_guardrail_mode"
+    token_acquirer.acquire_mcp_token.assert_not_awaited()
+
+
+def test_concurrent_runs_keep_their_config_across_tool_steps() -> None:
+    headers = []
+
+    async def model_function(messages, info):
+        headers.append(dict(info.model_settings["extra_headers"]))
+        await asyncio.sleep(0)
+        if isinstance(messages[-1].parts[0], ToolReturnPart):
+            return ModelResponse(parts=[TextPart("done")])
+        return ModelResponse(parts=[ToolCallPart("lookup", {})])
+
+    agent = Agent(
+        FunctionModel(model_function), deps_type=AgentRunDependencies,
+        model_settings=_portkey_model_settings,
+    )
+
+    @agent.tool_plain
+    def lookup() -> str:
+        return "result"
+
+    async def run_test():
+        await asyncio.gather(*(
+            agent.run("hello", run_id=f"run-{mode}", deps=AgentRunDependencies(
+                token_m="token-m", user_oid=mode, username=None,
+                jira_service_desk_id="3", portkey_config=f"pc-test-{mode}",
+            ))
+            for mode in ("on", "off")
+        ))
+
+    asyncio.run(run_test())
+    assert len(headers) == 4
+    for header in headers:
+        mode = header["x-portkey-trace-id"].removeprefix("run-")
+        assert header["x-portkey-config"] == f"pc-test-{mode}"
+
+
 def test_portkey_metadata_reports_one_key_per_security_group() -> None:
     def deps(groups: tuple[str, ...]) -> AgentRunDependencies:
         return AgentRunDependencies(
@@ -243,6 +353,7 @@ def test_portkey_metadata_reports_one_key_per_security_group() -> None:
             user_oid="alice",
             username="alice@example.com",
             jira_service_desk_id="3",
+            portkey_config="pc-test-off",
             groups=groups,
         )
 
@@ -282,7 +393,8 @@ def test_agent_service_maps_obo_consent_error(tmp_path: Path) -> None:
     )
 
     with pytest.raises(AgentServiceError) as raised:
-        asyncio.run(service.dispatch_chat(SimpleNamespace(), _authenticated()))
+        request = SimpleNamespace(json=AsyncMock(return_value={}))
+        asyncio.run(service.dispatch_chat(request, _authenticated()))
 
     assert raised.value.status_code == 403
     assert raised.value.code == "m365_authorization_required"
@@ -309,7 +421,8 @@ def test_agent_service_logs_unexpected_dispatch_error_with_traceback(
 
     with caplog.at_level(logging.ERROR, logger="work_assistant.agent"):
         with pytest.raises(AgentServiceError) as raised:
-            asyncio.run(service.dispatch_chat(SimpleNamespace(), _authenticated()))
+            request = SimpleNamespace(json=AsyncMock(return_value={}))
+            asyncio.run(service.dispatch_chat(request, _authenticated()))
 
     assert raised.value.code == "agent_execution_failed"
     record = next(
