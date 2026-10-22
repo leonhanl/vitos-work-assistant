@@ -675,7 +675,7 @@ Dockerfile，不读取根目录 Compose。本地仍运行 `docker compose build`
 | 文件 | 内容 |
 |---|---|
 | `work-assistant-images-<version>-linux-amd64.tar.gz` | 三个镜像，使用 `docker load` 导入 |
-| `work-assistant-skills-<version>.tar.gz` | Git 已跟踪的 Skills 文件，保持独立于 Agent 镜像 |
+| `work-assistant-skills-<version>.zip` | Git 已跟踪的 Skills 文件，保持独立于 Agent 镜像 |
 | `work-assistant-deploy-<version>.zip` | 引用镜像的 Compose、运行配置模板、场景 JSON、版本清单和部署说明 |
 
 文件默认保留 14 天。下载后按部署包中的 `README.md` 配置运行环境和 Bridge 首次授权。

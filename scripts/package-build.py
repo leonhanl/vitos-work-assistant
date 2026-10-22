@@ -4,7 +4,6 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
-import tarfile
 import zipfile
 
 
@@ -27,11 +26,13 @@ def main() -> None:
     skill_files = [root / name for name in tracked if name]
     if not any(path.name == "SKILL.md" for path in skill_files):
         raise SystemExit("No tracked SKILL.md files to package.")
-    with tarfile.open(
-        args.output / f"work-assistant-skills-{args.version}.tar.gz", "w:gz"
+    with zipfile.ZipFile(
+        args.output / f"work-assistant-skills-{args.version}.zip",
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
     ) as archive:
         for path in skill_files:
-            archive.add(path, arcname=path.relative_to(skills_root), recursive=False)
+            archive.write(path, arcname=path.relative_to(skills_root))
 
     with zipfile.ZipFile(
         args.output / f"work-assistant-deploy-{args.version}.zip",

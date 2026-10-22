@@ -12,7 +12,7 @@ Git commit SHA；`version.json` 记录对应的镜像和 Skills 版本。
 unzip work-assistant-deploy-<version>.zip
 docker load -i work-assistant-images-<version>-linux-amd64.tar.gz
 mkdir -p skills
-tar -xzf work-assistant-skills-<version>.tar.gz -C skills
+unzip work-assistant-skills-<version>.zip -d skills
 ```
 
 这个包里的 `compose.yaml` 使用 `image:`，不会在服务器重新构建。仓库根目录的
