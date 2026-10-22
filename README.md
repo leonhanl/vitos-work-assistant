@@ -636,9 +636,9 @@ MCP Server 自身的认证、Graph、文档解析和端到端测试由独立的
 
 ## 7. GitHub Actions 自动构建
 
-工作流位于 [`.github/workflows/build.yml`](.github/workflows/build.yml)。推送到 `main`、
-推送 `v*` tag 或手动触发时，先运行 Agent、Red Team Bridge 和 Web 三组测试，再构建
-Linux amd64 的三个镜像并上传下载包。针对 `main` 的 PR 只运行测试，不读取构建 Secret。
+工作流位于 [`.github/workflows/build.yml`](.github/workflows/build.yml)，仅支持手动触发。
+运行时先执行 Agent、Red Team Bridge 和 Web 三组测试，再构建 Linux amd64 的三个镜像
+并上传下载包。推送代码、tag 或创建 PR 不会触发该工作流。
 依赖安装使用两个 Python 项目各自的 `uv.lock` 和前端的 `package-lock.json`。
 
 ### GitHub 配置
@@ -669,7 +669,7 @@ Dockerfile，不读取根目录 Compose。本地仍运行 `docker compose build`
 ### 触发与下载
 
 将工作流提交到 GitHub 默认分支后，在 **Actions → Build artifacts → Run workflow**
-手动运行，也可以推送到 `main` 自动运行。成功后点开具体 run，在页面底部的 **Artifacts**
+手动运行。成功后点开具体 run，在页面底部的 **Artifacts**
 下载以下三个文件，`<version>` 为该次构建的完整 commit SHA：
 
 | 文件 | 内容 |

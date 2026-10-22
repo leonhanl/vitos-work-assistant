@@ -1,11 +1,6 @@
 name: Build artifacts
 
 on:
-  push:
-    branches: [main]
-    tags: ["v*"]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -44,7 +39,6 @@ jobs:
 
   build:
     needs: test
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     env:
       BUILD_VERSION: ${{ github.sha }}
