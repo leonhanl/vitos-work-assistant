@@ -1,0 +1,145 @@
+name: Build artifacts
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v10
+        with:
+          version: "0.11.7"
+          python-version: "3.13"
+
+      - name: Test Agent
+        working-directory: apps/agent
+        run: uv run --frozen --extra dev pytest tests -q
+
+      - name: Test Red Team Bridge
+        working-directory: apps/redteam-bridge
+        run: uv run --frozen --extra dev pytest tests -q
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Test Web
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm test
+
+  build:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    env:
+      BUILD_VERSION: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Prepare Web configuration
+        env:
+          WEB_ENV: ${{ secrets.WEB_ENV }}
+        run: |
+          if [ -z "$WEB_ENV" ]; then
+            echo "::error::Configure the WEB_ENV repository secret before building."
+            exit 1
+          fi
+          printf '%s\n' "$WEB_ENV" > "$RUNNER_TEMP/web.env"
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          from uuid import UUID
+
+          values = {}
+          for line in (Path(os.environ["RUNNER_TEMP"]) / "web.env").read_text().splitlines():
+              line = line.strip()
+              if not line or line.startswith("#"):
+                  continue
+              key, separator, value = line.partition("=")
+              if not separator or not key.startswith("VITE_"):
+                  raise SystemExit("WEB_ENV must contain only VITE_* assignments and comments.")
+              values[key] = value.strip().strip("\"'")
+          for key in (
+              "VITE_ENTRA_TENANT_ID",
+              "VITE_ENTRA_CLIENT_ID",
+              "VITE_WORK_ASSISTANT_API_CLIENT_ID",
+          ):
+              try:
+                  UUID(values.get(key, ""))
+              except ValueError:
+                  raise SystemExit(f"WEB_ENV: {key} must be a UUID.") from None
+          expected = f"api://{values['VITE_WORK_ASSISTANT_API_CLIENT_ID']}/access_as_user"
+          if values.get("VITE_WORK_ASSISTANT_API_SCOPE") != expected:
+              raise SystemExit("WEB_ENV: API scope must match the Work Assistant API client ID.")
+          PY
+
+      - name: Build Agent image
+        run: |
+          docker build --platform linux/amd64 \
+            --file apps/agent/Dockerfile \
+            --tag "vitos-work-assistant-agent:$BUILD_VERSION" .
+
+      - name: Build Web image
+        run: |
+          docker build --platform linux/amd64 --no-cache \
+            --secret "id=web_env,src=$RUNNER_TEMP/web.env" \
+            --file apps/web/Dockerfile \
+            --tag "vitos-work-assistant-web:$BUILD_VERSION" .
+
+      - name: Build Red Team Bridge image
+        run: |
+          docker build --platform linux/amd64 \
+            --file apps/redteam-bridge/Dockerfile \
+            --tag "vitos-redteam-bridge:$BUILD_VERSION" .
+
+      - name: Package images, Skills and deployment configuration
+        run: |
+          python3 scripts/package-build.py "$BUILD_VERSION"
+          docker save \
+            "vitos-work-assistant-agent:$BUILD_VERSION" \
+            "vitos-work-assistant-web:$BUILD_VERSION" \
+            "vitos-redteam-bridge:$BUILD_VERSION" \
+            | gzip > "dist/work-assistant-images-$BUILD_VERSION-linux-amd64.tar.gz"
+
+      - name: Upload images
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/work-assistant-images-*-linux-amd64.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Skills
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/work-assistant-skills-*.tar.gz
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload deployment configuration
+        uses: actions/upload-artifact@v7
+        with:
+          path: dist/work-assistant-deploy-*.zip
+          archive: false
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove temporary Web configuration
+        if: always()
+        run: rm -f "$RUNNER_TEMP/web.env"

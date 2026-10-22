@@ -634,6 +634,55 @@ Access 或 SharePoint ACL。
 MCP Server 自身的认证、Graph、文档解析和端到端测试由独立的
 [`vitos-m365-mcp`](https://github.com/leonhanl/vitos-m365-mcp#readme) 仓库运行。
 
+## 7. GitHub Actions 自动构建
+
+工作流位于 [`.github/workflows/build.yml`](.github/workflows/build.yml)。推送到 `main`、
+推送 `v*` tag 或手动触发时，先运行 Agent、Red Team Bridge 和 Web 三组测试，再构建
+Linux amd64 的三个镜像并上传下载包。针对 `main` 的 PR 只运行测试，不读取构建 Secret。
+依赖安装使用两个 Python 项目各自的 `uv.lock` 和前端的 `package-lock.json`。
+
+### GitHub 配置
+
+在仓库 **Settings → Secrets and variables → Actions → Secrets → New repository secret**
+创建名称为 `WEB_ENV` 的 Secret，内容直接填写本地 `apps/web/.env` 中的四个实际参数：
+
+```dotenv
+VITE_ENTRA_TENANT_ID=<Directory tenant ID>
+VITE_ENTRA_CLIENT_ID=<SPA Application client ID>
+VITE_WORK_ASSISTANT_API_CLIENT_ID=<Work Assistant API Application client ID>
+VITE_WORK_ASSISTANT_API_SCOPE=api://<Work Assistant API Application client ID>/access_as_user
+```
+
+请用真实 UUID 替换占位符，scope 中的 API ID 必须与第三行一致。Secret 只包含以上
+`VITE_*` 参数和可选注释；不要放入后端 client secret 或 Portkey API key。
+这些前端参数会按 Vite 的行为写入浏览器静态资源，Secret 只是它们在 GitHub 上的管理方式。
+
+如果仓库禁用了 Actions，在 **Settings → Actions → General** 启用，并允许工作流使用
+`actions/*` 和 `astral-sh/setup-uv`。本流程只需要 `contents: read` 权限，无需 PAT、
+GHCR 或 Docker Hub 账号，也不需要在 GitHub 配置后端运行时密钥。
+
+Actions 从 `WEB_ENV` 生成临时文件，通过已有的 `web_env` BuildKit secret 传给 Web
+Dockerfile，不读取根目录 Compose。本地仍运行 `docker compose build`，使用本地
+`apps/web/.env`；原有 Compose 和 Dockerfile 无需修改。更新 GitHub Secret 后，需要
+重新运行构建才会生成新的前端配置。
+
+### 触发与下载
+
+将工作流提交到 GitHub 默认分支后，在 **Actions → Build artifacts → Run workflow**
+手动运行，也可以推送到 `main` 自动运行。成功后点开具体 run，在页面底部的 **Artifacts**
+下载以下三个文件，`<version>` 为该次构建的完整 commit SHA：
+
+| 文件 | 内容 |
+|---|---|
+| `work-assistant-images-<version>-linux-amd64.tar.gz` | 三个镜像，使用 `docker load` 导入 |
+| `work-assistant-skills-<version>.tar.gz` | Git 已跟踪的 Skills 文件，保持独立于 Agent 镜像 |
+| `work-assistant-deploy-<version>.zip` | 引用镜像的 Compose、运行配置模板、场景 JSON、版本清单和部署说明 |
+
+文件默认保留 14 天。下载后按部署包中的 `README.md` 配置运行环境和 Bridge 首次授权。
+发布用 Compose 的源文件在 [`deploy/compose.yaml`](deploy/compose.yaml)，部署步骤也可在
+[`deploy/README.md`](deploy/README.md) 查看。镜像只支持 Linux amd64；ARM 主机需另行构建。
+流程不执行真实 Entra、M365、Jira、Portkey 或 AIRS 联调，也不自动更新服务器。
+
 ## 已知限制与下一阶段
 
 当前对话历史只保存在浏览器页面内存中，刷新页面后会丢失。服务端持久化 memory、跨设备

@@ -1,0 +1,76 @@
+name: vitos-work-assistant
+
+services:
+  agent:
+    image: vitos-work-assistant-agent:${IMAGE_TAG:?Set IMAGE_TAG in .env}
+    env_file:
+      - ./apps/agent/.env
+    environment:
+      SKILLS_DIRECTORY: /opt/work-assistant/skills
+      SKILLS_VERSION: ${SKILLS_ARTIFACT_VERSION:?Set SKILLS_ARTIFACT_VERSION in .env}
+    init: true
+    volumes:
+      - type: bind
+        source: ${SKILLS_ARTIFACT_PATH:-./skills}
+        target: /opt/work-assistant/skills
+        read_only: true
+        bind:
+          create_host_path: false
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  web:
+    image: vitos-work-assistant-web:${IMAGE_TAG:?Set IMAGE_TAG in .env}
+    depends_on:
+      agent:
+        condition: service_healthy
+    init: true
+    volumes:
+      - type: bind
+        source: ./apps/web/public/config
+        target: /usr/share/nginx/html/config
+        read_only: true
+        bind:
+          create_host_path: false
+    ports:
+      - "0.0.0.0:${WEB_PORT:-5173}:80"
+
+  redteam-bridge:
+    image: vitos-redteam-bridge:${IMAGE_TAG:?Set IMAGE_TAG in .env}
+    env_file:
+      - ./apps/redteam-bridge/.env
+    depends_on:
+      agent:
+        condition: service_healthy
+    init: true
+    ports:
+      - "0.0.0.0:${REDTEAM_PORT:-8080}:8080"
+    volumes:
+      - redteam-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  redteam-data:
