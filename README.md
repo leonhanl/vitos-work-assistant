@@ -73,10 +73,14 @@ vitos-work-assistant/
 │   ├── web/                  # Vite + Vanilla JS + MSAL Browser
 │   ├── agent/                # FastAPI + Token A validation + Pydantic AI
 │   └── redteam-bridge/       # AIRS REST 接入、设备码授权与用户 Token 缓存
-└── services/
-    ├── jira-mcp-http/         # Jira MCP HTTP service 配置与启动文档
-    └── salesforce-mcp-http/   # 占位；即将实现
+├── services/
+│   ├── jira-mcp-http/         # Jira MCP HTTP service 配置与启动文档
+│   └── salesforce-mcp-http/   # 占位；即将实现
+└── samples/
+    └── sharepoint/           # SharePoint 演示用示例文档
 ```
+
+SharePoint 示例文档存放在 [`samples/sharepoint/`](samples/sharepoint/README.md)，用于保存和复用演示文件。
 
 Prisma AIRS AI Red Teaming 可使用独立的
 [`redteam-bridge`](apps/redteam-bridge/README.md)。它提供 API Key 保护的 REST 入口，
