@@ -126,15 +126,13 @@ h1 {
 
 .sidebar,
 .messages {
-  --scrollbar-thumb: #d6dae1;
+  --scrollbar-thumb: transparent;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
 .sidebar:hover,
-.sidebar:focus-within,
-.messages:hover,
-.messages:focus-within {
+.messages:hover {
   --scrollbar-thumb: #98a2b3;
 }
 
