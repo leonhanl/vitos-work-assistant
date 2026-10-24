@@ -497,7 +497,9 @@ docker compose down
 1. 打开 `http://localhost:5173`，点击 **Sign in with Microsoft**。
 2. 使用 Alice 登录。Alice 可以完成账号选择、密码、MFA 或 Conditional Access，但不应
    看到 **Permissions requested** 用户 consent 页面。
-3. 页面右上方应显示 `account.name` / `account.username`。
+3. 页面右上方应显示 `account.name` / `account.username`。登录后前端会调用
+   `GET /api/me`，将返回的 `vitos_sales` / `vitos_it_support` 组标签分别显示为姓名旁的
+   `Sales` / `IT Support`；同时属于两个组时显示两者，没有匹配组时只显示姓名与邮箱。
 4. 如需单独排查 API 身份，可携带 Token A 调用 `GET /api/me`；后端返回 Alice 的 `oid`、tenant `tid`、username 与
    `groups`。`groups` 是映射后的组标签，仅在配置了
    [§1.4](#14-可选在-token-a-中包含-security-group) 时非空。

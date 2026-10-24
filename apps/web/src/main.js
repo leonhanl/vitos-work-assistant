@@ -4,7 +4,7 @@ import { buildResumeArray, randomUUID } from "@ag-ui/client";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 
-import { ApiError, createChatAgent, submitFeedback } from "./api.js";
+import { ApiError, createChatAgent, getCurrentUser, submitFeedback } from "./api.js";
 import { initializeAuth, login, logout } from "./auth.js";
 
 const JIRA_CREATE_TOOL = "jira_create_customer_request";
@@ -111,7 +111,7 @@ async function start() {
     }
 
     showSignedIn(account);
-    await loadScenarios();
+    await Promise.all([loadScenarios(), loadAccountDepartments()]);
   } catch (error) {
     showSignedOut();
     const isConfigurationError = error instanceof Error && (
@@ -122,6 +122,21 @@ async function start() {
       ? error.message
       : "无法初始化身份验证。请检查前端配置。";
     showError(elements.signInError, message);
+  }
+}
+
+async function loadAccountDepartments() {
+  try {
+    const { groups } = await getCurrentUser();
+    const departments = [
+      ["vitos_sales", "Sales"],
+      ["vitos_it_support", "IT Support"],
+    ].filter(([group]) => groups.includes(group)).map(([, label]) => label);
+    if (departments.length) {
+      elements.accountName.textContent += ` · ${departments.join(" / ")}`;
+    }
+  } catch (error) {
+    console.error("Could not load account departments", error);
   }
 }
 

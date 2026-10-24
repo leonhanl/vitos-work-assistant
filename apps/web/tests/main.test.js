@@ -36,13 +36,17 @@ class Element {
   }
 }
 
-async function page(storage = new Map(), scenarios = config) {
+async function page(
+  storage = new Map(), scenarios = config,
+  user = { groups: [] }, account = { username: "test@example.com" },
+) {
   const elements = new Map();
   const agents = [];
   const fetches = [];
+  const errors = [];
   let reloads = 0;
   const context = {
-    console, randomUUID,
+    console: { ...console, error: (...args) => errors.push(args) }, randomUUID,
     marked: { use() {} }, DOMPurify: { addHook() {} },
     document: {
       querySelector: (selector) => {
@@ -53,7 +57,11 @@ async function page(storage = new Map(), scenarios = config) {
     },
     sessionStorage: { getItem: (key) => storage.get(key), setItem: (key, value) => storage.set(key, value) },
     window: { location: { reload: () => { reloads++; } } },
-    initializeAuth: async () => ({ username: "test@example.com" }),
+    initializeAuth: async () => account,
+    getCurrentUser: async () => {
+      if (user instanceof Error) throw user;
+      return user;
+    },
     fetch: async (...args) => {
       fetches.push(args);
       return { ok: true, json: async () => scenarios };
@@ -73,8 +81,35 @@ async function page(storage = new Map(), scenarios = config) {
   };
   vm.runInNewContext(source, context);
   await new Promise(setImmediate);
-  return { elements, agents, context, fetches, storage, reloads: () => reloads };
+  return { elements, agents, context, fetches, errors, storage, reloads: () => reloads };
 }
+
+test("account header displays departments from mapped groups", async () => {
+  const cases = [
+    ["Alice", "alice@vitosdemo.com", ["vitos_sales"], "Alice · Sales"],
+    ["Bob", "bob@vitosdemo.com", ["vitos_it_support"], "Bob · IT Support"],
+    ["Alice", "alice@vitosdemo.com", ["unrelated", "vitos_it_support", "vitos_sales"], "Alice · Sales / IT Support"],
+    ["Alice", "alice@vitosdemo.com", ["unrelated"], "Alice"],
+    ["Alice", "alice@vitosdemo.com", [], "Alice"],
+  ];
+  for (const [name, username, groups, expected] of cases) {
+    const p = await page(new Map(), config, { groups }, { name, username });
+    assert.equal(p.elements.get("#account-name").textContent, expected);
+    assert.equal(p.elements.get("#account-username").textContent, username);
+    assert.equal(p.errors.length, 0);
+  }
+});
+
+test("department lookup failure keeps the account and chat usable and logs the error", async () => {
+  const error = new Error("backend_unavailable");
+  const p = await page(new Map(), config, error);
+  assert.equal(p.elements.get("#account-name").textContent, "test@example.com");
+  assert.equal(p.elements.get("#signed-in-view").hidden, false);
+  assert.equal(p.elements.get("#scenario-list").children.length, config.scenarios.length);
+  assert.deepEqual(p.errors, [["Could not load account departments", error]]);
+  await p.context.sendMessage("hello");
+  assert.equal(p.agents[0].runs.length, 1);
+});
 
 test("preset questions across groups and typed input share one conversation, default OFF", async () => {
   const p = await page();
