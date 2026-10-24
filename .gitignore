@@ -199,3 +199,4 @@ output/
 presentations/
 apps/agent/.env.staging
 apps/redteam-bridge/.env.staging
+.env.staging
