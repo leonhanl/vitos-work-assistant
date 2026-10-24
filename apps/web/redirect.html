@@ -1,17 +1,17 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Completing Microsoft sign-in</title>
+    <title>正在完成 Microsoft 登录</title>
   </head>
   <body>
-    <p>Completing Microsoft sign-in…</p>
+    <p>正在完成 Microsoft 登录…</p>
     <script type="module">
       import { broadcastResponseToMainFrame } from "@azure/msal-browser/redirect-bridge";
 
       broadcastResponseToMainFrame().catch(() => {
-        document.body.textContent = "Microsoft sign-in could not be completed. Return to the app and try again.";
+        document.body.textContent = "无法完成 Microsoft 登录。请返回应用重试。";
       });
     </script>
   </body>

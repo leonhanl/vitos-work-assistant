@@ -92,13 +92,13 @@ function requireConfiguration() {
   if (!configuredScope) missing.push("VITE_WORK_ASSISTANT_API_SCOPE");
 
   if (missing.length) {
-    throw new Error(`Missing frontend configuration: ${missing.join(", ")}`);
+    throw new Error(`缺少前端配置：${missing.join(", ")}`);
   }
 
   const expectedScope = `api://${apiClientId}/access_as_user`;
   if (apiScope !== expectedScope) {
     throw new Error(
-      `VITE_WORK_ASSISTANT_API_SCOPE must be ${expectedScope}`,
+      `VITE_WORK_ASSISTANT_API_SCOPE 必须为 ${expectedScope}`,
     );
   }
 }

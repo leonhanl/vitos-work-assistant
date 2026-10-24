@@ -45,7 +45,7 @@ const elements = {
 let chatAgent = null;
 const guardrailsEnabled = sessionStorage.getItem(GUARDRAIL_STORAGE_KEY) === "true";
 elements.guardrailSwitch.checked = guardrailsEnabled;
-elements.guardrailStatus.textContent = guardrailsEnabled ? "ON" : "OFF";
+elements.guardrailStatus.textContent = guardrailsEnabled ? "已开启" : "已关闭";
 
 elements.guardrailSwitch.addEventListener("change", () => {
   // Keep the current mode until the user confirms the reload.
@@ -61,13 +61,13 @@ elements.guardrailDialog.addEventListener("close", () => {
 });
 
 elements.signInButton.addEventListener("click", async () => {
-  setButtonBusy(elements.signInButton, true, "Redirecting…");
+  setButtonBusy(elements.signInButton, true, "正在跳转…");
   hideError(elements.signInError);
   try {
     await login();
   } catch {
-    showError(elements.signInError, "Microsoft sign-in could not be started.");
-    setButtonBusy(elements.signInButton, false, "Sign in with Microsoft");
+    showError(elements.signInError, "无法启动 Microsoft 登录。");
+    setButtonBusy(elements.signInButton, false, "使用 Microsoft 账号登录");
   }
 });
 
@@ -77,7 +77,7 @@ elements.signOutButton.addEventListener("click", async () => {
   try {
     await logout();
   } catch {
-    showError(elements.chatError, "Microsoft sign-out could not be completed.");
+    showError(elements.chatError, "无法完成 Microsoft 退出登录。");
     elements.signOutButton.disabled = false;
   }
 });
@@ -115,12 +115,12 @@ async function start() {
   } catch (error) {
     showSignedOut();
     const isConfigurationError = error instanceof Error && (
-      error.message.startsWith("Missing frontend configuration") ||
+      error.message.startsWith("缺少前端配置") ||
       error.message.startsWith("VITE_")
     );
     const message = isConfigurationError
       ? error.message
-      : "Authentication could not be initialized. Check the frontend configuration.";
+      : "无法初始化身份验证。请检查前端配置。";
     showError(elements.signInError, message);
   }
 }
@@ -163,7 +163,7 @@ async function loadScenarios() {
     setChatBusy(Boolean(chatAgent?.isRunning));
   } catch {
     elements.scenarioList.replaceChildren();
-    showError(elements.scenarioError, "Could not load scenarios. Check scenarios.json and refresh the page.");
+    showError(elements.scenarioError, "无法加载场景。请检查 scenarios.json 并刷新页面。");
   }
 }
 
@@ -180,12 +180,12 @@ function showSignedIn(account) {
   elements.signedOutView.hidden = true;
   elements.signedInView.hidden = false;
 
-  elements.accountName.textContent = account.name || account.username || "Signed-in user";
+  elements.accountName.textContent = account.name || account.username || "已登录用户";
   elements.accountUsername.textContent = account.username || "";
   elements.messages.replaceChildren();
   appendMessage(
     "Assistant",
-    `Hi ${account.name || account.username || "there"}, how can I help?`,
+    `${account.name || account.username || "你好"}，有什么可以帮你的吗？`,
   );
   elements.messageInput.focus();
 }
@@ -195,7 +195,7 @@ async function runChat(parameters = {}) {
   setChatBusy(true);
   hideError(elements.chatError);
 
-  const pendingMessage = appendMessage("Assistant", "Thinking…", true);
+  const pendingMessage = appendMessage("Assistant", "正在思考…", true);
   let hasText = false;
   let traceId = null;
 
@@ -224,9 +224,15 @@ async function runChat(parameters = {}) {
         // followed by RUN_FINISHED, so the pending bubble has to be cleared here.
         console.error("Agent run error", event.code, event.message);
         if (!hasText) pendingMessage.remove();
+        const messages = {
+          gateway_rate_limited: "AI 网关请求过于频繁。请等待一分钟后重试。",
+          gateway_budget_exhausted: "AI 助手的使用预算已耗尽。请联系 IT 支持，重试无法解决此问题。",
+          gateway_guardrail_blocked: "此请求已被企业安全策略拦截。请修改请求；如有疑问，请联系 IT 支持。",
+          agent_execution_failed: "助手无法完成此请求。",
+        };
         showError(
           elements.chatError,
-          event.message || "The assistant request failed. Please try again.",
+          messages[event.code] || event.message || "助手请求失败，请重试。",
         );
       },
       onRunFinishedEvent(details) {
@@ -256,12 +262,12 @@ function appendFeedback(article, traceId) {
   section.className = "feedback";
 
   const prompt = document.createElement("span");
-  prompt.textContent = "Rate this answer:";
+  prompt.textContent = "为本次回答评分：";
 
   const rating = document.createElement("span");
   rating.className = "feedback-rating";
   rating.setAttribute("role", "group");
-  rating.setAttribute("aria-label", "Rate this answer from 1 to 5 stars");
+  rating.setAttribute("aria-label", "请为本次回答评 1 到 5 星");
 
   const status = document.createElement("span");
   status.className = "feedback-status";
@@ -277,23 +283,23 @@ function appendFeedback(article, traceId) {
     button.type = "button";
     button.className = "feedback-button";
     button.textContent = "★";
-    button.setAttribute("aria-label", `${value} out of 5 stars`);
-    button.title = `${value} out of 5 stars`;
+    button.setAttribute("aria-label", `${value} 星（满分 5 星）`);
+    button.title = `${value} 星（满分 5 星）`;
     button.addEventListener("mouseenter", () => previewRating(value));
     button.addEventListener("focus", () => previewRating(value));
     button.addEventListener("click", async () => {
       buttons.forEach((item) => { item.disabled = true; });
-      status.textContent = "Saving…";
+      status.textContent = "正在保存…";
       try {
         await submitFeedback(traceId, value);
         buttons.forEach((item, index) => {
           item.classList.toggle("selected", index < value);
         });
-        status.textContent = "Thanks for your feedback.";
+        status.textContent = "感谢你的反馈。";
       } catch {
         buttons.forEach((item) => { item.disabled = false; });
         previewRating(0);
-        status.textContent = "Feedback could not be saved. Try again.";
+        status.textContent = "无法保存反馈，请重试。";
       }
     });
     return button;
@@ -316,13 +322,13 @@ function appendFeedback(article, traceId) {
 
 function renderJiraApproval(interrupts, messages) {
   if (interrupts.length !== 1) {
-    showError(elements.chatError, "The assistant requested an unsupported approval operation.");
+    showError(elements.chatError, "助手请求的审批操作暂不受支持。");
     return;
   }
   const interrupt = interrupts[0];
   const toolCall = findToolCall(messages, interrupt.toolCallId);
   if (toolCall?.name !== JIRA_CREATE_TOOL) {
-    showError(elements.chatError, "The assistant requested an unsupported approval operation.");
+    showError(elements.chatError, "助手请求的审批操作暂不受支持。");
     return;
   }
 
@@ -330,21 +336,21 @@ function renderJiraApproval(interrupts, messages) {
   const article = document.createElement("article");
   article.className = "message assistant approval-message";
   const heading = document.createElement("h2");
-  heading.textContent = "Approval required";
+  heading.textContent = "需要审批";
   const card = document.createElement("section");
   card.className = "approval-card";
   const title = document.createElement("h3");
-  title.textContent = "Create Jira service request";
+  title.textContent = "创建 Jira 服务请求";
   card.append(title);
-  card.append(detail("Summary", fields.summary || "Not provided"));
-  card.append(detail("Description", fields.description || "Not provided"));
-  card.append(detail("Request type", fields.requestTypeId || "Not provided"));
+  card.append(detail("摘要", fields.summary || "未提供"));
+  card.append(detail("描述", fields.description || "未提供"));
+  card.append(detail("请求类型", fields.requestTypeId || "未提供"));
 
   const actions = document.createElement("div");
   actions.className = "approval-actions";
   actions.append(
-    approvalButton("Reject", "secondary-button", false, interrupt, article),
-    approvalButton("Approve and create", "primary-button", true, interrupt, article),
+    approvalButton("拒绝", "secondary-button", false, interrupt, article),
+    approvalButton("批准并创建", "primary-button", true, interrupt, article),
   );
   card.append(actions);
   article.append(heading, card);
@@ -422,7 +428,7 @@ function appendMessage(label, text, pending = false) {
   if (pending) article.classList.add("pending");
 
   const heading = document.createElement("h2");
-  heading.textContent = label;
+  heading.textContent = label === "You" ? "你" : "助手";
   const content = document.createElement("div");
   content.className = "message-body";
   content.textContent = text;
@@ -445,7 +451,7 @@ function appendSources(article, sources = []) {
   const section = document.createElement("section");
   section.className = "sources";
   const heading = document.createElement("h3");
-  heading.textContent = "Sources";
+  heading.textContent = "参考来源";
   const list = document.createElement("ul");
 
   for (const source of sources) {
@@ -485,7 +491,7 @@ function setChatBusy(busy) {
   const blocked = busy || Boolean(chatAgent?.pendingInterrupts.length);
   elements.messageInput.disabled = blocked;
   elements.sendButton.disabled = blocked;
-  elements.sendButton.textContent = busy ? "Thinking…" : "Send";
+  elements.sendButton.textContent = busy ? "正在思考…" : "发送";
   elements.guardrailSwitch.disabled = blocked;
   elements.scenarioList.querySelectorAll("button").forEach((button) => {
     button.disabled = blocked;
@@ -510,13 +516,13 @@ function hideError(element) {
 function userMessageFor(error) {
   const kind = error instanceof ApiError ? error.kind : "unknown";
   const messages = {
-    not_signed_in: "You are not signed in. Sign in with Microsoft and try again.",
-    interaction_required: "Microsoft authentication requires interaction. Complete sign-in and try again.",
-    authentication_required: "Authentication is required. Sign out, sign in again, and retry.",
-    permission_denied: "Permission denied. Ask an administrator to grant access_as_user.",
-    backend_unavailable: "The Work Assistant backend is unavailable.",
-    agent_request_failed: "The assistant request failed. Please try again.",
-    unknown: "The request could not be completed.",
+    not_signed_in: "你尚未登录。请使用 Microsoft 账号登录后重试。",
+    interaction_required: "Microsoft 身份验证需要你完成操作。请完成登录后重试。",
+    authentication_required: "需要身份验证。请退出并重新登录后重试。",
+    permission_denied: "权限不足。请联系管理员授予 access_as_user 权限。",
+    backend_unavailable: "Vito's Work Assistant 后端服务暂不可用。",
+    agent_request_failed: "助手请求失败，请重试。",
+    unknown: "无法完成请求。",
   };
   return messages[kind];
 }
