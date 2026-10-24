@@ -197,3 +197,5 @@ services/jira-mcp-http/.jira.env
 .codex-build/
 output/
 presentations/
+apps/agent/.env.staging
+apps/redteam-bridge/.env.staging
