@@ -145,3 +145,29 @@ test("invalid scenario configuration shows an error and leaves free chat usable"
   await p.context.sendMessage("hello");
   assert.equal(p.agents[0].runs.length, 1);
 });
+
+test("run errors show Chinese messages and keep the original server message in the console", async () => {
+  const p = await page();
+  const logs = [];
+  p.context.console = { error: (...args) => logs.push(args) };
+  const cases = [
+    ["gateway_rate_limited", "AI 网关请求过于频繁。请等待一分钟后重试。"],
+    ["gateway_budget_exhausted", "AI 助手的使用预算已耗尽。请联系 IT 支持，重试无法解决此问题。"],
+    ["gateway_guardrail_blocked", "此请求已被企业安全策略拦截。请修改请求；如有疑问，请联系 IT 支持。"],
+    ["agent_execution_failed", "助手无法完成此请求。"],
+    ["jira_identity_unavailable", "无法确定当前用户的 Jira 客户身份。请联系 IT 支持。"],
+    ["invalid_jira_ticket_draft", "助手未能生成有效的 Jira 工单草稿。请重新描述需求后重试。"],
+    ["future_error_code", "助手请求失败，请重试。"],
+    [undefined, "助手请求失败，请重试。"],
+  ];
+  for (const [code, expected] of cases) {
+    const message = "Original English server error";
+    p.agents[0].runAgent = async (parameters, subscriber) => {
+      subscriber.onRunErrorEvent({ event: { code, message } });
+    };
+    await p.context.runChat();
+    assert.equal(p.elements.get("#chat-error").hidden, false);
+    assert.equal(p.elements.get("#chat-error").textContent, expected);
+    assert.deepEqual(logs.at(-1), ["Agent run error", code, message]);
+  }
+});

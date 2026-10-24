@@ -229,10 +229,12 @@ async function runChat(parameters = {}) {
           gateway_budget_exhausted: "AI 助手的使用预算已耗尽。请联系 IT 支持，重试无法解决此问题。",
           gateway_guardrail_blocked: "此请求已被企业安全策略拦截。请修改请求；如有疑问，请联系 IT 支持。",
           agent_execution_failed: "助手无法完成此请求。",
+          jira_identity_unavailable: "无法确定当前用户的 Jira 客户身份。请联系 IT 支持。",
+          invalid_jira_ticket_draft: "助手未能生成有效的 Jira 工单草稿。请重新描述需求后重试。",
         };
         showError(
           elements.chatError,
-          messages[event.code] || event.message || "助手请求失败，请重试。",
+          messages[event.code] || "助手请求失败，请重试。",
         );
       },
       onRunFinishedEvent(details) {
