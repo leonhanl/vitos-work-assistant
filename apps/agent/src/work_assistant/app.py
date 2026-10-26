@@ -60,10 +60,11 @@ def create_app(
             return
 
         settings = Settings()
-        application.state.chat_service = AgentService(
+        service = AgentService(
             settings,
             OboTokenService(settings),
         )
+        application.state.chat_service = service
         application.state.feedback_service = feedback_service or PortkeyFeedbackService(
             str(settings.portkey_base_url),
             settings.portkey_api_key.get_secret_value(),
@@ -73,7 +74,10 @@ def create_app(
             settings.skills_version,
             settings.skills_directory,
         )
-        yield
+        try:
+            yield
+        finally:
+            await service.aclose()
 
     application = FastAPI(
         title="Vito's Work Assistant API",

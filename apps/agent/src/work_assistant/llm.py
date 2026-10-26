@@ -1,9 +1,11 @@
 """OpenAI-compatible PydanticAI model construction."""
 
+from pydantic_ai.models import create_async_http_client
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIChatModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from work_assistant.config import Settings
+from work_assistant.portkey_stream import adapt_portkey_stream
 
 
 def create_chat_model_client(settings: Settings) -> OpenAIChatModel:
@@ -15,9 +17,12 @@ def create_chat_model_client(settings: Settings) -> OpenAIChatModel:
         # Responses API is intentionally out of scope for this minimal demo.
         model_settings["openai_reasoning_effort"] = "none"
 
+    http_client = create_async_http_client()
+    http_client.event_hooks["response"].append(adapt_portkey_stream)
     provider = OpenAIProvider(
         api_key=settings.portkey_api_key.get_secret_value(),
         base_url=str(settings.portkey_base_url),
+        http_client=http_client,
     )
     return OpenAIChatModel(
         settings.llm_model,

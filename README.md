@@ -616,6 +616,92 @@ Agent 在未提供模式时默认 OFF，显式提供时只接受 JSON 布尔值�
 不读取 Web 开关，也不保存模式；多轮测试请在每次请求中传入所需模式。切换测试模式时，
 省略旧的 `conversation_id` 开始新会话，避免混入旧上下文。
 
+### Streaming 输出检查与回答撤回
+
+Agent 的 Chat Completions 请求统一发送
+`x-portkey-strict-open-ai-compliance: false`，以接收 Portkey 的 `hook_results`。
+要在响应中获得检查结果，Portkey Guardrail 应配置为同步执行（`async=false`）；
+异步检查结果只出现在 Portkey 日志中。参见
+[Portkey Streaming Responses 文档](https://portkey.ai/docs/product/guardrails#streaming-responses)。
+
+Portkey 在完整输出组装后进行输出检查，结果可能位于 `data: [DONE]` 之后。
+OpenAI SDK 会在看到 `[DONE]` 时停止读取，因此 Agent 在 HTTPX 与 SDK 之间增加了一个
+小型 SSE 适配层：
+
+1. 普通内容 chunk 立即转发，Web 继续逐步显示回答，不缓存整篇回答。
+2. `[DONE]` 暂存，继续读取本次 HTTP 响应的剩余数据。
+3. 收到 `hook_results.after_request_hooks` 时，任一 `verdict` 为 JSON `false` 就终止
+   本次 run，发送现有 AG-UI `RUN_ERROR / gateway_guardrail_blocked`，不再发送
+   `RUN_FINISHED`。应用按检查失败撤回回答，不依赖 hook 的 `deny` 设置或 HTTP 446。
+4. HTTP 响应流正常结束（EOF）且没有失败结果时，向 SDK 补发 `[DONE]`，正常完成 run。
+   **检查结果是可选的：没有配置 Guardrail、只有输入检查或未返回 Verdict 都可以正常完成。**
+   应用不把“没有 Verdict”解释为“检查通过”。
+
+完成条件是 **HTTP 响应流正常结束，不是必须收到 Verdict**。Agent 不需要提前知道
+Config 中是否配置了输出 Guardrail。HTTP 响应结束与底层 TCP 连接断开不同；连接可以
+继续复用。这个逻辑要求网关在发完内容和可选检查结果后正常结束本次 HTTP 响应。
+如果网关迟迟不结束响应，使用现有 LLM HTTP 超时；连接中断、超时或缺少 `[DONE]`
+都按运行错误处理，不伪装成检查通过。
+
+下面是 **Portkey → Agent 适配层** 的简化 SSE 示例，仅保留相关字段；空行分隔事件。
+“HTTP 响应结束”是协议结束信号，不是一个额外的 SSE 消息。实际网关格式和结束时序
+需要在部署环境中联调确认。
+
+**Sample 1：没有配置 Guardrail。**
+
+```text
+data: {"choices":[{"delta":{"content":"This is the answer."}}]}
+
+data: [DONE]
+
+```
+
+随后 HTTP 响应结束。适配层不等待不存在的 Verdict，在 EOF 后补发 `[DONE]` 给 SDK；
+前端收到 `RUN_FINISHED`，保留回答。
+
+**Sample 2：配置了输出 Guardrail，检查通过。**
+
+```text
+data: {"choices":[{"delta":{"content":"This is the answer."}}]}
+
+data: [DONE]
+
+data: {"hook_results":{"after_request_hooks":[{"verdict":true}]}}
+
+```
+
+随后 HTTP 响应结束。适配层消费检查结果，在 EOF 后补发 `[DONE]` 给 SDK；
+前端收到 `RUN_FINISHED`，保留回答。检查结果即使出现在 `[DONE]` 之前也可以处理。
+
+**Sample 3：配置了输出 Guardrail，检查失败。**
+
+```text
+data: {"choices":[{"delta":{"content":"Content rejected by the output check."}}]}
+
+data: [DONE]
+
+data: {"hook_results":{"after_request_hooks":[{"verdict":false,"deny":false}]}}
+
+```
+
+前端此时可能已经显示回答。适配层发现失败后立即抛出输出拦截异常，不向 SDK 补发
+`[DONE]`。Agent 通过现有错误链路发出下面的事件；不会再发出 `RUN_FINISHED`：
+
+```text
+data: {"type":"RUN_ERROR","code":"gateway_guardrail_blocked","message":"This request was blocked by the corporate security policy. Please revise your request, or contact IT support if you think this is a mistake."}
+
+```
+
+Web 删除本次 run 的整个回答气泡及其参考来源，并通过 AG-UI subscriber 返回运行前的
+消息历史，清除本轮新增的 assistant/tool 消息，避免被拦截内容进入下一轮上下文。
+之前的对话和本次用户问题保留；已经显示过回答时，界面提示：
+“本次回答未通过企业内容安全检查，已撤回。请调整问题后重试。”
+普通 HTTP 446 输入拦截仍沿用原有安全策略错误提示。
+
+撤回只移除界面内容和本轮生成的对话历史，无法收回用户已经看见的信息，也不撤销
+已经完成的工具操作；Jira 创建仍遵守原有审批流程。Red Team Bridge 复用同一
+`gateway_guardrail_blocked` 错误，将其映射为 HTTP 446，失败 run 不写入持久化历史。
+
 ## 6. 测试
 
 ```bash
@@ -629,7 +715,8 @@ python -m pytest apps/agent/tests
 
 `npm test` 使用 Node 内置测试工具和 DOM/auth 测试替身，覆盖问题自动发送、跨分组沿用
 同一 conversation、开关确认/取消、刷新后模式保留、审批 resume 和配置加载错误；不访问
-真实认证或后端。前端视觉布局及真实 Portkey 效果仍需手动确认。
+真实认证或后端。另用真实 AG-UI 客户端与模拟 SSE 验证输出拦截后的气泡撤回、工具消息
+清理，以及下一轮请求不再携带被拦截内容。前端视觉布局及真实 Portkey 效果仍需手动确认。
 
 后端认证测试使用本地 RSA signing key，不访问真实 Entra、JWKS、Graph 或 LLM，覆盖
 匿名 health、缺 token、无效 token、错误 audience / issuer / tenant、缺 scope，以及
@@ -637,6 +724,9 @@ python -m pytest apps/agent/tests
 创建审批、可信参数覆盖，以及 Alice/Bob 并发运行时各自的 Token M 确实进入真实本地
 Streamable HTTP MCP 请求。它们不会验证真实 tenant 的 admin consent、Conditional
 Access 或 SharePoint ACL。
+Streaming 测试使用真实 HTTPX/OpenAI/Pydantic AI/AG-UI 与模拟网关响应，验证内容在
+EOF 前持续转发、无 Verdict 正常完成、`[DONE]` 后的输出检查通过/失败，以及尾部网络
+错误不被当作成功；不连接真实 Portkey 或 Prisma AIRS。
 MCP Server 自身的认证、Graph、文档解析和端到端测试由独立的
 [`vitos-m365-mcp`](https://github.com/leonhanl/vitos-m365-mcp#readme) 仓库运行。
 

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import vm from "node:vm";
+import { HttpAgent } from "@ag-ui/client";
 
 // Exercise the browser entry point with DOM/auth doubles, without calling services.
 const source = (await readFile(new URL("../src/main.js", import.meta.url), "utf8"))
@@ -18,16 +19,31 @@ class Element {
   value = "";
   textContent = "";
   addEventListener(name, handler) { this.listeners[name] = handler; }
-  append(...children) { this.children.push(...children); }
-  replaceChildren(...children) { this.children = children; }
+  append(...children) {
+    for (const child of children) child.parentElement = this;
+    this.children.push(...children);
+  }
+  replaceChildren(...children) {
+    for (const child of this.children) child.parentElement = null;
+    this.children = [];
+    this.append(...children);
+  }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
   querySelectorAll(selector) {
     return this.children.flatMap((child) => [
-      ...(child.tagName === selector ? [child] : []), ...child.querySelectorAll(selector),
+      ...((selector.startsWith(".")
+        ? (child.className || "").split(" ").includes(selector.slice(1))
+        : child.tagName === selector) ? [child] : []), ...child.querySelectorAll(selector),
     ]);
   }
   focus() {}
   scrollIntoView() {}
-  remove() {}
+  remove() {
+    if (this.parentElement) {
+      this.parentElement.children = this.parentElement.children.filter((child) => child !== this);
+      this.parentElement = null;
+    }
+  }
   showModal() { this.open = true; }
   async close(value) {
     this.returnValue = value;
@@ -39,6 +55,7 @@ class Element {
 async function page(
   storage = new Map(), scenarios = config,
   user = { groups: [] }, account = { username: "test@example.com" },
+  agentFactory = null,
 ) {
   const elements = new Map();
   const agents = [];
@@ -46,8 +63,8 @@ async function page(
   const errors = [];
   let reloads = 0;
   const context = {
-    console: { ...console, error: (...args) => errors.push(args) }, randomUUID,
-    marked: { use() {} }, DOMPurify: { addHook() {} },
+    console: { ...console, error: (...args) => errors.push(args) }, randomUUID, structuredClone,
+    marked: { use() {}, parse: (text) => text }, DOMPurify: { addHook() {}, sanitize: (text) => text },
     document: {
       querySelector: (selector) => {
         if (!elements.has(selector)) elements.set(selector, new Element());
@@ -67,7 +84,7 @@ async function page(
       return { ok: true, json: async () => scenarios };
     },
     createChatAgent: (threadId) => {
-      const agent = {
+      const agent = agentFactory ? agentFactory(threadId) : {
         threadId, messages: [], runs: [], pendingInterrupts: [], isRunning: false,
         addMessage(message) { this.messages.push(message); },
         async runAgent(parameters, subscriber) {
@@ -98,6 +115,63 @@ test("account header displays departments from mapped groups", async () => {
     assert.equal(p.elements.get("#account-username").textContent, username);
     assert.equal(p.errors.length, 0);
   }
+});
+
+test("a streamed guardrail error retracts the whole answer and restores real AG-UI history", async () => {
+  const requests = [];
+  const p = await page(new Map(), config, { groups: [] }, { username: "test@example.com" },
+    (threadId) => new HttpAgent({
+      threadId, url: "https://agent.invalid/chat",
+      fetch: async (url, options) => {
+        const input = JSON.parse(options.body);
+        requests.push(input);
+        const events = [
+          { type: "RUN_STARTED", threadId, runId: input.runId },
+          { type: "TEXT_MESSAGE_START", messageId: "answer-1", role: "assistant" },
+          { type: "TEXT_MESSAGE_CONTENT", messageId: "answer-1", delta: "First partial answer" },
+          { type: "TEXT_MESSAGE_END", messageId: "answer-1" },
+        ];
+        if (requests.length === 1) events.push(
+          { type: "TOOL_CALL_START", toolCallId: "call-1", toolCallName: "search", parentMessageId: "answer-1" },
+          { type: "TOOL_CALL_ARGS", toolCallId: "call-1", delta: "{}" },
+          { type: "TOOL_CALL_END", toolCallId: "call-1" },
+          { type: "TOOL_CALL_RESULT", messageId: "tool-1", toolCallId: "call-1", content: "tool result" },
+          { type: "TEXT_MESSAGE_START", messageId: "answer-2", role: "assistant" },
+          { type: "TEXT_MESSAGE_CONTENT", messageId: "answer-2", delta: "Blocked answer" },
+          { type: "TEXT_MESSAGE_END", messageId: "answer-2" },
+          { type: "CUSTOM", name: "sources", value: [{ name: "Test source" }] },
+          { type: "RUN_ERROR", code: "gateway_guardrail_blocked", message: "Blocked by policy" },
+        );
+        else events.push({ type: "RUN_FINISHED", threadId, runId: input.runId });
+        return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+          headers: { "Content-Type": "text/event-stream" },
+        });
+      },
+    }));
+  const previous = [
+    { id: "old-user", role: "user", content: "previous question" },
+    { id: "old-answer", role: "assistant", content: "previous answer" },
+  ];
+  p.agents[0].setMessages(previous);
+  const previousBubble = p.context.appendMessage("Assistant", "previous answer");
+  await p.context.sendMessage("blocked question");
+
+  const container = p.elements.get("#messages");
+  assert.ok(container.children.includes(previousBubble));
+  assert.equal(container.children.length, 3); // Welcome, prior answer, current user.
+  assert.equal(container.querySelectorAll(".sources").length, 0);
+  assert.equal(p.elements.get("#chat-error").textContent, "本次回答未通过企业内容安全检查，已撤回。请调整问题后重试。");
+  assert.deepEqual(p.agents[0].messages.map((message) => message.content), [
+    "previous question", "previous answer", "blocked question",
+  ]);
+  assert.ok(p.agents[0].messages.every((message) => !message.toolCalls && message.role !== "tool"));
+
+  await p.context.sendMessage("next question");
+  assert.deepEqual(requests[1].messages.map((message) => message.content), [
+    "previous question", "previous answer", "blocked question", "next question",
+  ]);
+  assert.equal(p.elements.get("#chat-error").hidden, true);
+  assert.equal(container.children.at(-1).querySelector(".message-body").innerHTML, "First partial answer");
 });
 
 test("department lookup failure keeps the account and chat usable and logs the error", async () => {

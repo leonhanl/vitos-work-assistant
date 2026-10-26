@@ -290,6 +290,103 @@ def test_ag_ui_stream_uses_the_requested_config(tmp_path: Path, props, expected_
     assert "RUN_FINISHED" in stream
     assert "RUN_ERROR" not in stream
     assert headers and all(header["x-portkey-config"] == expected_config for header in headers)
+    assert all(header["x-portkey-strict-open-ai-compliance"] == "false" for header in headers)
+
+
+@pytest.mark.parametrize("enabled,verdict", [
+    (False, None), (True, None), (True, True), (True, False),
+])
+def test_portkey_stream_waits_for_eof_and_checks_optional_tail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enabled, verdict,
+) -> None:
+    """Exercise real HTTPX, OpenAI, Pydantic AI, and AG-UI with a gated SSE body."""
+    def sse(payload):
+        return f"data: {json.dumps(payload, ensure_ascii=False)}\r\n\r\n".encode()
+
+    async def run_test():
+        at_done = asyncio.Event()
+        finish = asyncio.Event()
+        closed = []
+        headers = []
+
+        class GatewayStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                content = sse({
+                    "id": "chat-1", "object": "chat.completion.chunk",
+                    "created": 1, "model": "tool-model",
+                    "choices": [{"index": 0, "delta": {"content": "示例回答"}, "finish_reason": None}],
+                })
+                # Split UTF-8, lines, and SSE event boundaries as a real network can.
+                for index in range(0, len(content), 7):
+                    yield content[index:index + 7]
+                yield b"data: [DONE]\r\n\r\n"
+                at_done.set()
+                await finish.wait()
+                if verdict is not None:
+                    yield sse({"hook_results": {"after_request_hooks": [
+                        {"verdict": verdict, "deny": False},
+                    ]}})
+
+            async def aclose(self):
+                closed.append(True)
+
+        async def handler(request):
+            headers.append(request.headers)
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=GatewayStream())
+
+        http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        monkeypatch.setattr("work_assistant.llm.create_async_http_client", lambda: http)
+        settings = _settings(tmp_path)
+        settings.llm_model = "tool-model"
+        settings.portkey_base_url = "https://gateway.invalid/v1"
+        service = AgentService(settings, SimpleNamespace(acquire_mcp_token=AsyncMock(return_value="token-m")))
+        body = {
+            "threadId": "thread-1", "runId": "run-1", "state": {},
+            "messages": [{"id": "m-1", "role": "user", "content": "hello"}],
+            "tools": [], "context": [], "forwardedProps": {"guardrails_enabled": enabled},
+        }
+        request = Request(
+            {"type": "http", "method": "POST", "path": "/chat",
+             "headers": [(b"accept", b"text/event-stream")]},
+            receive=AsyncMock(return_value={"type": "http.request", "body": json.dumps(body).encode()}),
+        )
+        events = []
+
+        async def collect():
+            with service._agent.override(toolsets=[]):
+                response = await service.dispatch_chat(request, _authenticated())
+                assert response.status_code == 200
+                async for chunk in response.body_iterator:
+                    events.extend(json.loads(line[5:]) for line in chunk.splitlines() if line.startswith("data:"))
+
+        task = asyncio.create_task(collect())
+        try:
+            await asyncio.wait_for(at_done.wait(), 5)
+            assert any(e["type"] == "TEXT_MESSAGE_CONTENT" and e["delta"] == "示例回答" for e in events)
+            assert not any(e["type"] in {"RUN_FINISHED", "RUN_ERROR"} for e in events)
+            assert not task.done()
+            finish.set()
+            await asyncio.wait_for(task, 5)
+        finally:
+            finish.set()
+            await task
+            await service.aclose()
+
+        assert closed
+        assert http.is_closed
+        assert headers[0]["x-portkey-strict-open-ai-compliance"] == "false"
+        assert headers[0]["x-portkey-config"] == ("pc-test-on" if enabled else "pc-test-off")
+        errors = [e for e in events if e["type"] == "RUN_ERROR"]
+        if verdict is False:
+            assert len(errors) == 1
+            assert errors[0]["code"] == "gateway_guardrail_blocked"
+            assert not any(e["type"] == "RUN_FINISHED" for e in events)
+            assert not any(e["type"] == "CUSTOM" and e["name"] in {"trace", "sources"} for e in events)
+        else:
+            assert not errors
+            assert events[-1]["type"] == "RUN_FINISHED"
+
+    asyncio.run(run_test())
 
 
 @pytest.mark.parametrize("props", [

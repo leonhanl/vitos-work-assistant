@@ -210,6 +210,7 @@ async function runChat(parameters = {}) {
   setChatBusy(true);
   hideError(elements.chatError);
 
+  const messagesBeforeRun = structuredClone(chatAgent.messages);
   const pendingMessage = appendMessage("Assistant", "正在思考…", true);
   let hasText = false;
   let traceId = null;
@@ -238,11 +239,14 @@ async function runChat(parameters = {}) {
         // The server sends a safe message plus a stable code; RUN_ERROR is never
         // followed by RUN_FINISHED, so the pending bubble has to be cleared here.
         console.error("Agent run error", event.code, event.message);
-        if (!hasText) pendingMessage.remove();
+        const blocked = event.code === "gateway_guardrail_blocked";
+        if (blocked || !hasText) pendingMessage.remove();
         const messages = {
           gateway_rate_limited: "AI 网关请求过于频繁。请等待一分钟后重试。",
           gateway_budget_exhausted: "AI 助手的使用预算已耗尽。请联系 IT 支持，重试无法解决此问题。",
-          gateway_guardrail_blocked: "此请求已被企业安全策略拦截。请修改请求；如有疑问，请联系 IT 支持。",
+          gateway_guardrail_blocked: hasText
+            ? "本次回答未通过企业内容安全检查，已撤回。请调整问题后重试。"
+            : "此请求已被企业安全策略拦截。请修改请求；如有疑问，请联系 IT 支持。",
           agent_execution_failed: "助手无法完成此请求。",
           jira_identity_unavailable: "无法确定当前用户的 Jira 客户身份。请联系 IT 支持。",
           invalid_jira_ticket_draft: "助手未能生成有效的 Jira 工单草稿。请重新描述需求后重试。",
@@ -251,6 +255,9 @@ async function runChat(parameters = {}) {
           elements.chatError,
           messages[event.code] || "助手请求失败，请重试。",
         );
+        // Restore the whole run so tool calls/results stay paired, and blocked
+        // content is not submitted as history on the next turn.
+        if (blocked) return { messages: messagesBeforeRun };
       },
       onRunFinishedEvent(details) {
         if (details.outcome === "interrupt") {

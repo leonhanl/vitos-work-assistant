@@ -28,6 +28,7 @@ from work_assistant.config import Settings
 from work_assistant.llm import create_chat_model_client
 from work_assistant.models import Source
 from work_assistant.obo import MCPTokenAcquirer, OboTokenError
+from work_assistant.portkey_stream import PortkeyOutputBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +120,7 @@ def _portkey_model_settings(
         extra_headers={
             **_portkey_observability_headers(ctx),
             "x-portkey-config": ctx.deps.portkey_config,
+            "x-portkey-strict-open-ai-compliance": "false",
         },
     )
 
@@ -212,6 +214,10 @@ def _classify_run_error(error: Exception) -> RunFailure:
             break
         if isinstance(exc, AgentServiceError):
             return RunFailure(exc.code, exc.public_message, exc.status_code)
+        if isinstance(exc, PortkeyOutputBlocked):
+            return RunFailure(
+                GUARDRAIL_BLOCKED, RUN_ERROR_MESSAGES[GUARDRAIL_BLOCKED], source="llm"
+            )
         if isinstance(exc, ModelHTTPError) and exc.status_code in POLICY_DENIAL_CODES:
             return _policy_denial(exc.status_code, "llm")
         if (
@@ -345,8 +351,9 @@ class AgentService:
         self._portkey_config_guardrail_on = settings.portkey_config_guardrail_on
         self._portkey_config_guardrail_off = settings.portkey_config_guardrail_off
         portkey_api_key = settings.portkey_api_key.get_secret_value()
+        self._owned_model = create_chat_model_client(settings) if model is None else None
         self._agent = Agent(
-            model or create_chat_model_client(settings),
+            model or self._owned_model,
             deps_type=AgentRunDependencies,
             output_type=[str, DeferredToolRequests],
             instructions=SYSTEM_PROMPT,
@@ -388,6 +395,11 @@ class AgentService:
                 base_toolset,
                 lambda run_ctx, tool, args: tool.name == JIRA_CREATE_TOOL,
             )
+
+    async def aclose(self) -> None:
+        """Close the HTTP client supplied to the model when the app stops."""
+        if self._owned_model is not None:
+            await self._owned_model.client.close()
 
     async def dispatch_chat(
         self,
