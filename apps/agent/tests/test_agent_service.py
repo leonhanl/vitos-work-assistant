@@ -664,7 +664,10 @@ def test_llm_guardrail_block_is_reported_without_gateway_details(
         event = _run_error(error)
 
     assert event.code == "gateway_guardrail_blocked"
-    assert "blocked by the corporate security policy" in event.message
+    assert event.message == (
+        "This operation was stopped by the corporate security policy. "
+        "Please contact IT support if you need assistance."
+    )
     assert "hook_results" not in event.message
     assert "hooks_failed" not in event.message
     record = next(

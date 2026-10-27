@@ -158,8 +158,8 @@ RUN_ERROR_MESSAGES = {
         "retrying will not help."
     ),
     GUARDRAIL_BLOCKED: (
-        "This request was blocked by the corporate security policy. "
-        "Please revise your request, or contact IT support if you think this is a mistake."
+        "This operation was stopped by the corporate security policy. "
+        "Please contact IT support if you need assistance."
     ),
     EXECUTION_FAILED: "The assistant could not complete this request.",
 }

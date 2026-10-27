@@ -160,7 +160,7 @@ test("a streamed guardrail error retracts the whole answer and restores real AG-
   assert.ok(container.children.includes(previousBubble));
   assert.equal(container.children.length, 3); // Welcome, prior answer, current user.
   assert.equal(container.querySelectorAll(".sources").length, 0);
-  assert.equal(p.elements.get("#chat-error").textContent, "本次回答未通过企业内容安全检查，已撤回。请调整问题后重试。");
+  assert.equal(p.elements.get("#chat-error").textContent, "本次回答未通过企业内容安全检查，已撤回。如需协助，请联系 IT 支持。");
   assert.deepEqual(p.agents[0].messages.map((message) => message.content), [
     "previous question", "previous answer", "blocked question",
   ]);
@@ -262,7 +262,7 @@ test("run errors show Chinese messages and keep the original server message in t
   const cases = [
     ["gateway_rate_limited", "AI 网关请求过于频繁。请等待一分钟后重试。"],
     ["gateway_budget_exhausted", "AI 助手的使用预算已耗尽。请联系 IT 支持，重试无法解决此问题。"],
-    ["gateway_guardrail_blocked", "此请求已被企业安全策略拦截。请修改请求；如有疑问，请联系 IT 支持。"],
+    ["gateway_guardrail_blocked", "本次处理因企业安全策略而中止。如需协助，请联系 IT 支持。"],
     ["agent_execution_failed", "助手无法完成此请求。"],
     ["jira_identity_unavailable", "无法确定当前用户的 Jira 客户身份。请联系 IT 支持。"],
     ["invalid_jira_ticket_draft", "助手未能生成有效的 Jira 工单草稿。请重新描述需求后重试。"],

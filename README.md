@@ -688,15 +688,16 @@ data: {"hook_results":{"after_request_hooks":[{"verdict":false,"deny":false}]}}
 `[DONE]`。Agent 通过现有错误链路发出下面的事件；不会再发出 `RUN_FINISHED`：
 
 ```text
-data: {"type":"RUN_ERROR","code":"gateway_guardrail_blocked","message":"This request was blocked by the corporate security policy. Please revise your request, or contact IT support if you think this is a mistake."}
+data: {"type":"RUN_ERROR","code":"gateway_guardrail_blocked","message":"This operation was stopped by the corporate security policy. Please contact IT support if you need assistance."}
 
 ```
 
 Web 删除本次 run 的整个回答气泡及其参考来源，并通过 AG-UI subscriber 返回运行前的
 消息历史，清除本轮新增的 assistant/tool 消息，避免被拦截内容进入下一轮上下文。
 之前的对话和本次用户问题保留；已经显示过回答时，界面提示：
-“本次回答未通过企业内容安全检查，已撤回。请调整问题后重试。”
-普通 HTTP 446 输入拦截仍沿用原有安全策略错误提示。
+“本次回答未通过企业内容安全检查，已撤回。如需协助，请联系 IT 支持。”
+尚未显示回答时提示：“本次处理因企业安全策略而中止。如需协助，请联系 IT 支持。”
+提示不推断触发原因，也不要求用户修改问题；知识库内容等也可能触发安全策略。
 
 撤回只移除界面内容和本轮生成的对话历史，无法收回用户已经看见的信息，也不撤销
 已经完成的工具操作；Jira 创建仍遵守原有审批流程。Red Team Bridge 复用同一
