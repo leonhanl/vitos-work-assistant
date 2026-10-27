@@ -118,44 +118,52 @@ h1 {
 }
 
 .sidebar {
-  padding: 22px 18px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
   border-right: 1px solid #e9ebee;
   background: #fafbfc;
+  overflow: hidden;
+}
+
+.scenario-panel {
+  min-height: 0;
+  padding: 26px 18px 22px;
   overflow-y: auto;
 }
 
-.sidebar,
+.scenario-panel,
 .messages {
   --scrollbar-thumb: transparent;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
-.sidebar:hover,
+.scenario-panel:hover,
 .messages:hover {
   --scrollbar-thumb: #98a2b3;
 }
 
 /* Fallback for browsers without the standard scrollbar properties. */
-.sidebar::-webkit-scrollbar,
+.scenario-panel::-webkit-scrollbar,
 .messages::-webkit-scrollbar {
   width: 6px;
 }
 
-.sidebar::-webkit-scrollbar-track,
+.scenario-panel::-webkit-scrollbar-track,
 .messages::-webkit-scrollbar-track {
   background: transparent;
 }
 
-.sidebar::-webkit-scrollbar-thumb,
+.scenario-panel::-webkit-scrollbar-thumb,
 .messages::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: var(--scrollbar-thumb);
 }
 
 .guardrail-control {
-  margin-bottom: 26px;
-  padding-bottom: 18px;
+  margin: 0 18px;
+  padding: 22px 0 18px;
   border-bottom: 1px solid #e2e5e9;
 }
 
