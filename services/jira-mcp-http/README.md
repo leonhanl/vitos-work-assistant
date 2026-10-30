@@ -56,8 +56,34 @@ Management。与 Work Assistant 场景对应的开发环境大致包含：
 - 一个供 IT 支持团队使用的 JSM 服务项目；
 - 一个适用于 VPN 故障或通用 IT 支持的客户请求类型；
 - 该请求类型包含 `summary` 和 `description`，以及项目配置的其他必填字段；
-- Alice 和 Bob 两个测试用户，他们作为客户可以在该服务项目中提交请求；
-- 不配置 SSO，Alice 和 Bob 在开发租户中使用普通的 Atlassian 账号。
+- Alice 和 Bob 两个测试用户，分别承担提出请求和处理请求的业务角色；
+- 不配置 Entra 与 Atlassian 之间的 SSO 或自动用户同步，两端账号分别管理。
+
+### Alice 与 Bob 的身份分工
+
+Demo 按以下角色分工配置账号，账号类型不需要保持一致：
+
+| 维度 | Alice | Bob |
+| --- | --- | --- |
+| 业务身份 | 销售员工 | IT 支持员工 |
+| Entra 身份 | 独立员工账号，属于销售组 | 独立员工账号，属于 IT 支持组 |
+| Jira 身份 | Portal-only customer（仅门户客户） | 普通 Atlassian 账号，配置 JSM Agent 应用访问权限和服务项目角色 |
+| 使用入口 | Help Center 客户门户 | Jira Service Management 内部工作台 |
+| 工作范围 | 提交请求、查看获准访问的请求及进度、补充信息 | 查看 Support Queue、分派和处理工单、回复客户 |
+
+Alice 只需要提出和跟进支持请求，因此门户账号已经足够，不需要访问内部 Support Queue
+或内部备注，也不需要占用 JSM Agent 许可证。Help Center 中的客户请求与 Bob 在工作台中
+处理的工单是同一个工作单元的两个视图。Bob 需要处理请求，因此应具备相应的 JSM Agent
+权限；仅出现在组织的 Users 列表中，并不能证明这些权限已经配置完成。角色和访问范围见
+[JSM 角色说明](https://support.atlassian.com/jira-service-management-cloud/docs/what-users-and-roles-are-there-in-jira-service-management/)
+及[客户账号类型说明](https://support.atlassian.com/user-management/docs/manage-jira-service-management-customer-accounts/)。
+
+两人在 Entra 中的账号用于登录 Work Assistant 和访问各自有权访问的 M365 数据；Jira
+中的账号用于标识请求客户或处理工单。两端使用相同邮箱进行身份匹配，不代表账号、密码
+或停用状态会自动同步。Jira MCP 仍使用独立的 service account 访问 API，不使用 Bob 的
+个人凭据，也不会自动继承他的个人 Jira 权限，见下文的“认证与请求用户身份”。
+
+### 请求用户映射与服务台配置
 
 Alice 和 Bob 的身份应当能够从 Work Assistant 已认证的用户身份，稳定映射到 JSM
 接受的 `raiseOnBehalfOf` 标识。在简单的开发环境中，通常可以使用其电子邮件地址或
