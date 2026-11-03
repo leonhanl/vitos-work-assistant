@@ -34,6 +34,14 @@ Gateway 集中管控。Agent 侧不再重复维护一份工具白名单。Agent 
 审批门，且只覆盖 `jira_create_customer_request`：如果这里或 gateway 放开了别的写操作
 工具，那个写操作会不经审批直接执行。
 
+## 选型说明
+
+截至 2026 年 11 月 3 日，在本项目开发租户中，service account 的 API token 创建页面未提供
+官方 JSM MCP 所需的 `read:jsm:agent-interface` 和 `write:jsm:agent-interface` scopes；
+使用临时 token 实际获取的官方 MCP 工具列表也未包含 JSM 创建请求工具。因此，本项目暂时
+采用已满足服务账号代员工提单需求的开源 mcp-atlassian 实现。该选择基于当前环境的功能
+可用性与验证结果，费用并非决定因素。
+
 ## Jira 与 Jira Service Management 的区别
 
 Jira 是底层的工作跟踪平台，提供项目、字段、工作流、权限、工作项和 issue key
