@@ -452,7 +452,7 @@ function appendMessage(label, text, pending = false) {
   if (pending) article.classList.add("pending");
 
   const heading = document.createElement("h2");
-  heading.textContent = label === "You" ? "你" : "助手";
+  heading.textContent = label === "You" ? "你" : "AI 助手";
   const content = document.createElement("div");
   content.className = "message-body";
   content.textContent = text;
